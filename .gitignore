@@ -1,0 +1,20 @@
+# Ambiente e Chaves
+.env
+.master.key
+
+# Bancos de Dados
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+
+# Node
+node_modules/
+dist/
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+venv/
+.venv/
