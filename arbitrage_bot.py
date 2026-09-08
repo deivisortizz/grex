@@ -297,7 +297,7 @@ class MarketDataEngine:
 
     async def start_ws_server(self):
         logger.info("📡 Iniciando servidor WebSocket em ws://localhost:8765")
-        async with websockets.serve(self.ws_handler, "localhost", 8765):
+        async with websockets.serve(self.ws_handler, "0.0.0.0", 8765):
             await asyncio.Future()
 
     async def broadcast_raw(self, payload):
