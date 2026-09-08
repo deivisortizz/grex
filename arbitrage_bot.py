@@ -343,6 +343,7 @@ class MarketDataEngine:
             logger.info(f"[✅ ORDENS EXECUTADAS] Buy ID: {results[0].get('id')} | Sell ID: {results[1].get('id')}")
         except Exception as e:
             logger.error(f"[❌ FALHA NA EXECUÇÃO ESPACIAL] {e}")
+            return # <- ESSA LINHA É VITAL! Ela impede que o trade falso vá para o painel.
 
         estimated_profit_brl = (amount_usdt * sell_price * (1 - self.FEE_TAKER)) - (amount_usdt * buy_price * (1 + self.FEE_TAKER))
         ts = datetime.now().isoformat()
