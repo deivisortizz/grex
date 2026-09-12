@@ -14,11 +14,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY arbitrage_bot.py .
 
 # Criar pasta /data que será usada para o volume do banco e chave
-RUN mkdir -p /app/data
-ENV DATA_DIR="/app/data"
+RUN chmod +x start.sh
+CMD ["/bin/bash", "start.sh"]
 
 # Expor a porta do WebSocket
-EXPOSE 8765
+EXPOSE 8765 8766 5173
 
 # Iniciar motor
 CMD ["python", "arbitrage_bot.py"]
