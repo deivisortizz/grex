@@ -7,12 +7,14 @@ import {
   Settings,
   HelpCircle,
   Waves,
+  Flame,
 } from 'lucide-react'
 
 const navItems = [
   { name: 'Cotações', icon: LineChart },
   { name: 'Analytics', icon: Activity },
   { name: 'Oceano Azul', icon: Waves },
+  { name: 'Base Sniper', icon: Flame, accent: 'orange' },
   { name: 'Histórico', icon: History },
   { name: 'Configurações', icon: Settings },
   { name: 'Corretoras', icon: Target },
@@ -36,6 +38,7 @@ export default function Sidebar({ wsStatus = 'Offline', ping, activeTab, setActi
         {navItems.map((item) => {
           const Icon = item.icon
           const isOcean = item.name === 'Oceano Azul'
+          const isSniper = item.name === 'Base Sniper'
           return (
             <button
               key={item.name}
@@ -44,7 +47,9 @@ export default function Sidebar({ wsStatus = 'Offline', ping, activeTab, setActi
                 activeTab === item.name
                   ? isOcean
                     ? 'bg-blue-500/10 text-white border border-blue-500/30'
-                    : 'bg-zinc-800 text-white'
+                    : isSniper
+                      ? 'bg-orange-500/10 text-white border border-orange-500/30'
+                      : 'bg-zinc-800 text-white'
                   : 'text-zinc-400 hover:text-white hover:bg-zinc-800/50'
               }`}
             >
@@ -52,7 +57,7 @@ export default function Sidebar({ wsStatus = 'Offline', ping, activeTab, setActi
                 size={18}
                 className={
                   activeTab === item.name
-                    ? isOcean ? 'text-blue-400' : 'text-emerald-400'
+                    ? isOcean ? 'text-blue-400' : isSniper ? 'text-orange-400' : 'text-emerald-400'
                     : ''
                 }
               />
@@ -60,6 +65,11 @@ export default function Sidebar({ wsStatus = 'Offline', ping, activeTab, setActi
               {isOcean && (
                 <span className="ml-auto text-[9px] font-bold uppercase tracking-widest text-blue-500/70 bg-blue-500/10 px-1.5 py-0.5 rounded">
                   LIVE
+                </span>
+              )}
+              {isSniper && (
+                <span className="ml-auto text-[9px] font-bold uppercase tracking-widest text-orange-500/70 bg-orange-500/10 px-1.5 py-0.5 rounded">
+                  BASE
                 </span>
               )}
             </button>

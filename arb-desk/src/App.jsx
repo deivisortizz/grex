@@ -9,6 +9,7 @@ import ExchangesTab from './components/ExchangesTab'
 import TriangularTab from './components/TriangularTab'
 import BlueOceanDesk from './components/BlueOceanDesk'
 import Login from './components/Login'
+import SniperDashboard from './components/sniper/SniperDashboard'
 
 function App() {
   // Estado de autenticação persistido
@@ -133,9 +134,10 @@ function App() {
         {activeTab === 'Oceano Azul' && <BlueOceanDesk triangularData={triangularData} isTriangularActive={config.is_triangular_active} sendCommand={sendCommand} />}
         {activeTab === 'Corretoras' && <ExchangesTab exchanges={config.exchanges} sendCommand={sendCommand} />}
         {activeTab === 'Autobot' && <AutobotTab isSpatialActive={config.is_spatial_active} sendCommand={sendCommand} />}
+        {activeTab === 'Base Sniper' && <SniperDashboard />}
 
         {/* Fallback for other tabs */}
-        {!['Cotações', 'Configurações', 'Histórico', 'Analytics', 'Autobot', 'Corretoras', 'Oceano Azul'].includes(activeTab) && (
+        {!['Cotações', 'Configurações', 'Histórico', 'Analytics', 'Autobot', 'Corretoras', 'Oceano Azul', 'Base Sniper'].includes(activeTab) && (
           <div className="text-zinc-500 py-10">Módulo em desenvolvimento...</div>
         )}
       </main>
