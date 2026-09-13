@@ -889,7 +889,9 @@ class BaseMemeSniper:
                 logger.error(f"❌ [FALHA DE EXECUÇÃO EVM] Erro ao enviar a compra. TX Payload Limpo: {tx} | Erro: {e}")
                 
         except Exception as e:
+            import traceback
             logger.error(f"❌ [FALHA DE EXECUÇÃO] Erro crítico na preparação do Sniper: {e}")
+            logger.error(traceback.format_exc())
 
     # ---------------------------------------------------------
     # WebSocket Server (Comunicação com React)
