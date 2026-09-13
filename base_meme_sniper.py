@@ -19,8 +19,12 @@ env_path = Path(__file__).parent / '.env'
 load_dotenv(dotenv_path=env_path)
 
 DATA_DIR = os.getenv('DATA_DIR', os.path.dirname(os.path.abspath(__file__)))
-BASE_WSS_RPC = os.getenv('BASE_WSS_RPC')
-BASE_HTTP_RPC = os.getenv('BASE_HTTP_RPC')
+
+# Suporte a dois padrões de nomenclatura de env vars:
+# Legado: BASE_WSS_RPC / BASE_HTTP_RPC
+# Novo (Docker/Coolify): BASE_RPC_WS / BASE_RPC_HTTP
+BASE_WSS_RPC   = os.getenv('BASE_RPC_WS')   or os.getenv('BASE_WSS_RPC')
+BASE_HTTP_RPC  = os.getenv('BASE_RPC_HTTP')  or os.getenv('BASE_HTTP_RPC')
 ROUTER_ADDRESS = os.getenv('ROUTER_ADDRESS')
 SNIPER_WS_PORT = int(os.getenv('SNIPER_WS_PORT', 8766))
 
@@ -153,15 +157,28 @@ ERC20_ABI = [
 
 class BaseMemeSniper:
     def __init__(self):
-        if not BASE_WSS_RPC or not BASE_HTTP_RPC:
-            logger.error("❌ RPCs da rede Base não configurados no .env")
-            sys.exit(1)
-            
         os.makedirs(DATA_DIR, exist_ok=True)
+        
+        # Validação de variáveis de ambiente (sem sys.exit para não crashar o container)
+        missing = []
+        if not BASE_WSS_RPC:
+            missing.append('BASE_RPC_WS (ou BASE_WSS_RPC)')
+        if not BASE_HTTP_RPC:
+            missing.append('BASE_RPC_HTTP (ou BASE_HTTP_RPC)')
             
-        # Conexões Web3 Assíncronas
-        self.w3_ws = AsyncWeb3(WebSocketProvider(BASE_WSS_RPC))
-        self.w3_http = AsyncWeb3(AsyncHTTPProvider(BASE_HTTP_RPC))
+        self.rpc_ok = len(missing) == 0
+        if not self.rpc_ok:
+            logger.critical(
+                f"❌ [CONFIG] Variáveis de ambiente ausentes: {', '.join(missing)}. "
+                f"O Sniper permanecerá em modo STANDBY até as variáveis serem configuradas."
+            )
+            # Web3 não será inicializado – métodos que dependem dele retornam cedo
+            self.w3_ws   = None
+            self.w3_http = None
+        else:
+            # Conexões Web3 Assíncronas
+            self.w3_ws   = AsyncWeb3(WebSocketProvider(BASE_WSS_RPC))
+            self.w3_http = AsyncWeb3(AsyncHTTPProvider(BASE_HTTP_RPC))
         
         self.cipher = None
         self.wallet_address = None
@@ -923,18 +940,28 @@ class BaseMemeSniper:
     async def run(self):
         logger.info("Iniciando Microsserviço Assíncrono: Base Meme Sniper 🚀")
         
+        # O servidor WebSocket SEMPRE sobe para manter o container vivo
+        # e permitir que o painel React mostre erros de configuração
+        if not self.rpc_ok:
+            logger.critical(
+                "⛔ [STANDBY] RPCs não configurados. O servidor WebSocket subirá na porta "
+                f"{SNIPER_WS_PORT} para diagnóstico, mas nenhum snipe será executado. "
+                "Configure BASE_RPC_WS e BASE_RPC_HTTP no painel de variáveis de ambiente."
+            )
+            # Sobe apenas o WS para manter container ativo e aceitando conexões do React
+            await self.start_ws_server()
+            return
+        
         # Carregamento do estado persistido sem travar o Event Loop
         await self.load_wallet()
         
-        # Lista de tasks concorrentes
+        # Tasks concorrentes plenas (RPC disponível)
         tasks = [
             self.start_ws_server(),
             self.listen_new_pairs(),
-            # Futuras tasks como: self.track_mempool_pending_txs(), etc
         ]
         
         try:
-            # asyncio.gather para escalar infinitamente as threads HFT
             await asyncio.gather(*tasks)
         except asyncio.CancelledError:
             pass
