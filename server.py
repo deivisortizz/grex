@@ -17,10 +17,16 @@ async def catch_all(full_path: str):
     if os.path.exists(file_path) and os.path.isfile(file_path):
         return FileResponse(file_path)
     
-    # Caso contrário, cai no fallback de SPA para o React Router (retorna index.html)
+    # Fallback de SPA para o React Router (retorna index.html SEM CACHE)
     index_path = "dist/index.html"
     if os.path.exists(index_path):
-        return FileResponse(index_path)
+        response = FileResponse(index_path)
+        # Força o navegador a sempre buscar o index.html atualizado
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+        return response
     
     # Retorno de erro caso o build ainda não exista (debug)
     return {"error": "Frontend build (dist) not found. Check if npm run build executed successfully."}
+
