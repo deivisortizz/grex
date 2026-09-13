@@ -473,7 +473,7 @@ class BaseMemeSniper:
                 'chainId': 8453
             }
 
-            approve_tx = await token_contract.functions.approve(
+            approve_tx = token_contract.functions.approve(
                 router_addr, int(INFINITE_APPROVE)
             ).build_transaction(tx_params)
 
@@ -552,7 +552,7 @@ class BaseMemeSniper:
             
             try:
                 # Usar SupportingFeeOnTransferTokens para evitar falhas com tokens de taxa
-                tx = await router.functions.swapExactTokensForETHSupportingFeeOnTransferTokens(
+                tx = router.functions.swapExactTokensForETHSupportingFeeOnTransferTokens(
                     int(amount_to_sell),
                     0,
                     path,
@@ -844,7 +844,7 @@ class BaseMemeSniper:
             tx_params = {k: v for k, v in tx_params.items() if v is not None}
             
             try:
-                tx = await router.functions.swapExactETHForTokens(
+                tx = router.functions.swapExactETHForTokens(
                     0,
                     path,
                     account.address,
