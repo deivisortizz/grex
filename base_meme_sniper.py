@@ -467,16 +467,19 @@ class BaseMemeSniper:
             max_priority_fee = self.w3_http.to_wei(0.1, 'gwei')
             max_fee_per_gas = (base_fee * 2) + max_priority_fee
 
-            approve_tx = await token_contract.functions.approve(
-                router_addr, INFINITE_APPROVE
-            ).build_transaction({
+            tx_params = {
                 'from': account.address,
-                'nonce': nonce,
+                'nonce': int(nonce),
                 'gas': 100000,
                 'maxFeePerGas': int(max_fee_per_gas),
                 'maxPriorityFeePerGas': int(max_priority_fee),
                 'chainId': 8453
-            })
+            }
+            tx_params = {k: v for k, v in tx_params.items() if v is not None}
+
+            approve_tx = await token_contract.functions.approve(
+                router_addr, int(INFINITE_APPROVE)
+            ).build_transaction(tx_params)
 
             try:
                 signed = self.w3_http.eth.account.sign_transaction(approve_tx, self.private_key)
@@ -489,6 +492,7 @@ class BaseMemeSniper:
             
         except Exception as e:
             logger.error(f"❌ [APPROVE] Falha ao preparar approve: {e}")
+
 
     async def execute_sell(self, target_token, sell_percentage=100):
         """
@@ -533,21 +537,24 @@ class BaseMemeSniper:
             
             deadline = int(time.time()) + 60
             
-            # Usar SupportingFeeOnTransferTokens para evitar falhas com tokens de taxa
-            tx = await router.functions.swapExactTokensForETHSupportingFeeOnTransferTokens(
-                amount_to_sell,
-                amount_out_min,
-                path,
-                account.address,
-                deadline
-            ).build_transaction({
+            tx_params = {
                 'from': account.address,
-                'nonce': nonce,
+                'nonce': int(nonce),
                 'gas': 250000,
                 'maxFeePerGas': int(max_fee_per_gas),
                 'maxPriorityFeePerGas': int(max_priority_fee),
                 'chainId': 8453
-            })
+            }
+            tx_params = {k: v for k, v in tx_params.items() if v is not None}
+            
+            # Usar SupportingFeeOnTransferTokens para evitar falhas com tokens de taxa
+            tx = await router.functions.swapExactTokensForETHSupportingFeeOnTransferTokens(
+                int(amount_to_sell),
+                int(amount_out_min),
+                path,
+                account.address,
+                int(deadline)
+            ).build_transaction(tx_params)
             
             try:
                 signed_tx = self.w3_http.eth.account.sign_transaction(tx, self.private_key)
@@ -806,20 +813,23 @@ class BaseMemeSniper:
             deadline = int(time.time()) + 60
             
             # 6. Construção da Transação
-            tx = await router.functions.swapExactETHForTokens(
-                amount_out_min,
-                path,
-                account.address,
-                deadline
-            ).build_transaction({
+            tx_params = {
                 'from': account.address,
                 'value': int(amount_in_wei),
-                'nonce': nonce,
-                'gas': estimated_gas_limit,
+                'nonce': int(nonce),
+                'gas': int(estimated_gas_limit),
                 'maxFeePerGas': int(max_fee_per_gas),
                 'maxPriorityFeePerGas': int(max_priority_fee),
                 'chainId': 8453
-            })
+            }
+            tx_params = {k: v for k, v in tx_params.items() if v is not None}
+            
+            tx = await router.functions.swapExactETHForTokens(
+                int(amount_out_min),
+                path,
+                account.address,
+                int(deadline)
+            ).build_transaction(tx_params)
             
             start_time = time.time()
             
