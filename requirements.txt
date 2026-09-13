@@ -3,3 +3,5 @@ aiofiles
 websockets
 python-dotenv
 cryptography
+web3>=6.0.0
+eth-account
