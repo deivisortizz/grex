@@ -470,17 +470,23 @@ class BaseMemeSniper:
             ).build_transaction({
                 'from': account.address,
                 'nonce': nonce,
-                'maxFeePerGas': max_fee_per_gas,
-                'maxPriorityFeePerGas': max_priority_fee,
+                'gas': 100000,
+                'maxFeePerGas': int(max_fee_per_gas),
+                'maxPriorityFeePerGas': int(max_priority_fee),
                 'chainId': 8453
             })
 
-            signed = self.w3_http.eth.account.sign_transaction(approve_tx, private_key=self.private_key)
-            tx_hash = await self.w3_http.eth.send_raw_transaction(signed.rawTransaction)
-            logger.info(f"✅ [APPROVE] Allowance infinita enviada para o Router | TX: {tx_hash.hex()}")
+            try:
+                signed = self.w3_http.eth.account.sign_transaction(approve_tx, self.private_key)
+                # Tenta usar raw_transaction (Web3 v6) ou rawTransaction (v5)
+                raw_tx = getattr(signed, 'raw_transaction', getattr(signed, 'rawTransaction', None))
+                tx_hash = await self.w3_http.eth.send_raw_transaction(raw_tx)
+                logger.info(f"✅ [APPROVE] Allowance infinita enviada para o Router | TX: {tx_hash.hex()}")
+            except Exception as e:
+                logger.error(f"❌ [APPROVE EVM ERROR] Falha ao enviar transação. TX payload: {approve_tx} | Erro: {e}")
             
         except Exception as e:
-            logger.error(f"❌ [APPROVE] Falha ao enviar approve: {e}")
+            logger.error(f"❌ [APPROVE] Falha ao preparar approve: {e}")
 
     async def execute_sell(self, target_token, sell_percentage=100):
         """
@@ -535,18 +541,22 @@ class BaseMemeSniper:
             ).build_transaction({
                 'from': account.address,
                 'nonce': nonce,
-                'maxFeePerGas': max_fee_per_gas,
-                'maxPriorityFeePerGas': max_priority_fee,
+                'gas': 250000,
+                'maxFeePerGas': int(max_fee_per_gas),
+                'maxPriorityFeePerGas': int(max_priority_fee),
                 'chainId': 8453
             })
             
-            signed_tx = self.w3_http.eth.account.sign_transaction(tx, private_key=self.private_key)
-            tx_hash = await self.w3_http.eth.send_raw_transaction(signed_tx.rawTransaction)
-            
-            logger.info(f"✅ [VENDA ENVIADA] {sell_percentage}% liquidado | TX Hash: {tx_hash.hex()}")
+            try:
+                signed_tx = self.w3_http.eth.account.sign_transaction(tx, self.private_key)
+                raw_tx = getattr(signed_tx, 'raw_transaction', getattr(signed_tx, 'rawTransaction', None))
+                tx_hash = await self.w3_http.eth.send_raw_transaction(raw_tx)
+                logger.info(f"✅ [VENDA ENVIADA] {sell_percentage}% liquidado | TX Hash: {tx_hash.hex()}")
+            except Exception as e:
+                logger.error(f"❌ [FALHA NA VENDA EVM] TX payload: {tx} | Erro: {e}")
             
         except Exception as e:
-            logger.error(f"❌ [FALHA NA VENDA] Erro ao tentar vender {target_token}: {e}")
+            logger.error(f"❌ [FALHA NA VENDA] Erro ao tentar preparar venda de {target_token}: {e}")
 
     async def monitor_position(self, target_token, entry_price_wei, initial_expected_out):
         """
@@ -801,35 +811,40 @@ class BaseMemeSniper:
                 deadline
             ).build_transaction({
                 'from': account.address,
-                'value': amount_in_wei,
+                'value': int(amount_in_wei),
                 'nonce': nonce,
-                'maxFeePerGas': max_fee_per_gas,
-                'maxPriorityFeePerGas': max_priority_fee,
+                'gas': estimated_gas_limit,
+                'maxFeePerGas': int(max_fee_per_gas),
+                'maxPriorityFeePerGas': int(max_priority_fee),
                 'chainId': 8453
             })
             
             start_time = time.time()
             
-            # 7. Assinatura Offline na RAM
-            signed_tx = self.w3_http.eth.account.sign_transaction(tx, private_key=self.private_key)
-            
-            # 8. Disparo
-            tx_hash = await self.w3_http.eth.send_raw_transaction(signed_tx.rawTransaction)
-            
-            latency = (time.time() - start_time) * 1000
-            logger.info(f"✅ [SNIPE ENVIADO] TX Hash: {tx_hash.hex()} | Latência: {latency:.2f}ms")
-            
-            self.total_trades += 1
-            await self.broadcast_ws({"type": "metrics_updated", "metrics": {"total_trades": self.total_trades, "win_trades": self.win_trades, "daily_pnl_usd": self.daily_pnl_usd}})
+            try:
+                # 7. Assinatura Offline na RAM
+                signed_tx = self.w3_http.eth.account.sign_transaction(tx, self.private_key)
+                
+                # 8. Disparo
+                raw_tx = getattr(signed_tx, 'raw_transaction', getattr(signed_tx, 'rawTransaction', None))
+                tx_hash = await self.w3_http.eth.send_raw_transaction(raw_tx)
+                
+                latency = (time.time() - start_time) * 1000
+                logger.info(f"✅ [SNIPE ENVIADO] TX Hash: {tx_hash.hex()} | Latência: {latency:.2f}ms")
+                
+                self.total_trades += 1
+                await self.broadcast_ws({"type": "metrics_updated", "metrics": {"total_trades": self.total_trades, "win_trades": self.win_trades, "daily_pnl_usd": self.daily_pnl_usd}})
 
-            # 9. Auto-Approve do Router em background (não trava o loop)
-            asyncio.create_task(self.auto_approve_router(target_token))
-            
-            # 10. Inicia Monitoramento de Posição (TP/SL) em background
-            asyncio.create_task(self.monitor_position(target_token, amount_in_wei, expected_out))
-            
+                # 9. Auto-Approve do Router em background (não trava o loop)
+                asyncio.create_task(self.auto_approve_router(target_token))
+                
+                # 10. Inicia Monitoramento de Posição (TP/SL) em background
+                asyncio.create_task(self.monitor_position(target_token, amount_in_wei, expected_out))
+            except Exception as e:
+                logger.error(f"❌ [FALHA DE EXECUÇÃO EVM] Erro ao enviar a compra. TX Payload: {tx} | Erro: {e}")
+                
         except Exception as e:
-            logger.error(f"❌ [FALHA DE EXECUÇÃO] Erro crítico no Sniper: {e}")
+            logger.error(f"❌ [FALHA DE EXECUÇÃO] Erro crítico na preparação do Sniper: {e}")
 
     # ---------------------------------------------------------
     # WebSocket Server (Comunicação com React)
