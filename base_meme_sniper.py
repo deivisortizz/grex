@@ -463,35 +463,35 @@ class BaseMemeSniper:
 
             nonce = await self.w3_http.eth.get_transaction_count(account.address)
             latest_block = await self.w3_http.eth.get_block('latest')
-            base_fee = latest_block['baseFeePerGas']
-            max_priority_fee = self.w3_http.to_wei(0.1, 'gwei')
-            max_fee_per_gas = (base_fee * 2) + max_priority_fee
-
+            gas_price = await self.w3_http.eth.gas_price
+            
             tx_params = {
                 'from': account.address,
                 'nonce': int(nonce),
                 'gas': 100000,
-                'maxFeePerGas': int(max_fee_per_gas),
-                'maxPriorityFeePerGas': int(max_priority_fee),
+                'gasPrice': int(gas_price),
                 'chainId': 8453
             }
-            tx_params = {k: v for k, v in tx_params.items() if v is not None}
 
             approve_tx = await token_contract.functions.approve(
                 router_addr, int(INFINITE_APPROVE)
             ).build_transaction(tx_params)
 
-            # Segurança contra conflito Legacy vs EIP-1559
-            if 'maxFeePerGas' in approve_tx and 'gasPrice' in approve_tx:
-                del approve_tx['gasPrice']
-
             # Remove qualquer None residual
             approve_tx = {k: v for k, v in approve_tx.items() if v is not None}
 
+            print(f"[DEBUG TX APPROVE]: {approve_tx}")
             try:
                 signed = self.w3_http.eth.account.sign_transaction(approve_tx, private_key=self.private_key)
-                # Tenta usar raw_transaction (Web3 v6) ou rawTransaction (v5)
-                raw_tx = getattr(signed, 'raw_transaction', getattr(signed, 'rawTransaction', None))
+                
+                try:
+                    raw_tx = signed.rawTransaction
+                except AttributeError:
+                    raw_tx = signed.raw_transaction
+                    
+                if raw_tx is None:
+                    raise ValueError("Falha ao extrair raw_tx do signed_tx")
+                    
                 tx_hash = await self.w3_http.eth.send_raw_transaction(raw_tx)
                 logger.info(f"✅ [APPROVE] Allowance infinita enviada para o Router | TX: {tx_hash.hex()}")
             except Exception as e:
@@ -537,10 +537,7 @@ class BaseMemeSniper:
             router = self.w3_http.eth.contract(address=self.w3_http.to_checksum_address(ROUTER_ADDRESS), abi=ROUTER_ABI)
             nonce = await self.w3_http.eth.get_transaction_count(account.address)
             
-            latest_block = await self.w3_http.eth.get_block('latest')
-            base_fee = latest_block['baseFeePerGas']
-            max_priority_fee = self.w3_http.to_wei(0.5, 'gwei')
-            max_fee_per_gas = (base_fee * 2) + max_priority_fee
+            gas_price = await self.w3_http.eth.gas_price
             
             deadline = int(time.time()) + 60
             
@@ -548,11 +545,9 @@ class BaseMemeSniper:
                 'from': account.address,
                 'nonce': int(nonce),
                 'gas': 250000,
-                'maxFeePerGas': int(max_fee_per_gas),
-                'maxPriorityFeePerGas': int(max_priority_fee),
+                'gasPrice': int(gas_price),
                 'chainId': 8453
             }
-            tx_params = {k: v for k, v in tx_params.items() if v is not None}
             
             # Usar SupportingFeeOnTransferTokens para evitar falhas com tokens de taxa
             tx = await router.functions.swapExactTokensForETHSupportingFeeOnTransferTokens(
@@ -563,16 +558,21 @@ class BaseMemeSniper:
                 int(deadline)
             ).build_transaction(tx_params)
             
-            # Segurança contra conflito Legacy vs EIP-1559
-            if 'maxFeePerGas' in tx and 'gasPrice' in tx:
-                del tx['gasPrice']
-
             # Remove qualquer None residual
             tx = {k: v for k, v in tx.items() if v is not None}
             
+            print(f"[DEBUG TX]: {tx}")
             try:
                 signed_tx = self.w3_http.eth.account.sign_transaction(tx, private_key=self.private_key)
-                raw_tx = getattr(signed_tx, 'raw_transaction', getattr(signed_tx, 'rawTransaction', None))
+                
+                try:
+                    raw_tx = signed_tx.rawTransaction
+                except AttributeError:
+                    raw_tx = signed_tx.raw_transaction
+                    
+                if raw_tx is None:
+                    raise ValueError("Falha ao extrair raw_tx do signed_tx")
+                    
                 tx_hash = await self.w3_http.eth.send_raw_transaction(raw_tx)
                 logger.info(f"✅ [VENDA ENVIADA] {sell_percentage}% liquidado | TX Hash: {tx_hash.hex()}")
             except Exception as e:
@@ -808,15 +808,11 @@ class BaseMemeSniper:
             account = self.w3_http.eth.account.from_key(self.private_key)
             nonce = await self.w3_http.eth.get_transaction_count(account.address)
             
-            # 5. Cálculo Dinâmico de Gás EIP-1559
-            latest_block = await self.w3_http.eth.get_block('latest')
-            base_fee = latest_block['baseFeePerGas']
-            max_priority_fee = self.w3_http.to_wei(0.5, 'gwei')
-            max_fee_per_gas = (base_fee * 2) + max_priority_fee
+            # 5. Cálculo de Gás Legacy
+            gas_price = await self.w3_http.eth.gas_price
             
-            # 5.5 Trava Dinâmica de Gás (Max Fee Cap)
-            estimated_gas_limit = 250000 # Custo médio de um swap na V2
-            estimated_gas_cost_wei = max_fee_per_gas * estimated_gas_limit
+            estimated_gas_limit = 350000
+            estimated_gas_cost_wei = gas_price * estimated_gas_limit
             estimated_gas_cost_usd = (estimated_gas_cost_wei / 1e18) * self.eth_usd_price
             
             max_gas_fee_usd = float(os.getenv('MAX_GAS_FEE_USD', 0.30))
@@ -832,11 +828,9 @@ class BaseMemeSniper:
                 'value': int(amount_in_wei),
                 'nonce': int(nonce),
                 'gas': int(estimated_gas_limit),
-                'maxFeePerGas': int(max_fee_per_gas),
-                'maxPriorityFeePerGas': int(max_priority_fee),
+                'gasPrice': int(gas_price),
                 'chainId': 8453
             }
-            tx_params = {k: v for k, v in tx_params.items() if v is not None}
             
             tx = await router.functions.swapExactETHForTokens(
                 int(amount_out_min),
@@ -845,21 +839,25 @@ class BaseMemeSniper:
                 int(deadline)
             ).build_transaction(tx_params)
             
-            # Segurança contra conflito Legacy vs EIP-1559
-            if 'maxFeePerGas' in tx and 'gasPrice' in tx:
-                del tx['gasPrice']
-
             # Remove qualquer None residual
             tx = {k: v for k, v in tx.items() if v is not None}
             
             start_time = time.time()
+            print(f"[DEBUG TX COMPRA]: {tx}")
             
             try:
                 # 7. Assinatura Offline na RAM
                 signed_tx = self.w3_http.eth.account.sign_transaction(tx, private_key=self.private_key)
                 
                 # 8. Disparo
-                raw_tx = getattr(signed_tx, 'raw_transaction', getattr(signed_tx, 'rawTransaction', None))
+                try:
+                    raw_tx = signed_tx.rawTransaction
+                except AttributeError:
+                    raw_tx = signed_tx.raw_transaction
+                    
+                if raw_tx is None:
+                    raise ValueError("Falha ao extrair raw_tx do signed_tx")
+                    
                 tx_hash = await self.w3_http.eth.send_raw_transaction(raw_tx)
                 
                 latency = (time.time() - start_time) * 1000
