@@ -1,6 +1,6 @@
 ## ---------- Multi‑Stage Build ----------
 # ── 1️⃣ Frontend Builder (Node) ────────────────────────────────────────────────
-FROM node:18-alpine AS frontend-builder
+FROM node:20-alpine AS frontend-builder
 WORKDIR /frontend
 
 # Instalar dependências do React (npm ci usa lockfile, fallback to npm install)
@@ -28,7 +28,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Incorporar assets estáticos gerados pelo frontend
-# O servidor Python deve servir os arquivos a partir de ./dist (ou ./static). Ajuste conforme necessário.
 COPY --from=frontend-builder /frontend/dist ./dist
 
 # Garantir que o script de inicialização seja executável
