@@ -1,24 +1,19 @@
 FROM python:3.11-slim
 
-# Definir pasta de trabalho
 WORKDIR /app
 
-# Instalar dependências essenciais do sistema
 RUN apt-get update && apt-get install -y --no-install-recommends gcc && rm -rf /var/lib/apt/lists/*
 
-# Copiar requirements e instalar pacotes Python
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copiar código do bot
-COPY arbitrage_bot.py .
+# COPIAR TODOS OS ARQUIVOS NECESSÁRIOS (incluindo scripts e start.sh)
+COPY . .
 
-# Criar pasta /data que será usada para o volume do banco e chave
+# Dar permissão de execução ao script de inicialização
 RUN chmod +x start.sh
+
+# Expor as portas dos WebSockets
+EXPOSE 8765 8766
+
 CMD ["/bin/bash", "start.sh"]
-
-# Expor a porta do WebSocket
-EXPOSE 8765 8766 5173
-
-# Iniciar motor
-CMD ["python", "arbitrage_bot.py"]
