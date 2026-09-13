@@ -14,5 +14,5 @@ MEME_PID=$!
 echo "✅ base_meme_sniper.py iniciado (PID: $MEME_PID)"
 
 # Iniciar servidor web FastAPI em foreground (mantém o container ativo)
-echo "✅ Servidor web (FastAPI) iniciado na porta 8000"
-exec uvicorn server:app --host 0.0.0.0 --port 8000
+echo "✅ Servidor web (FastAPI) iniciado na porta 3000"
+exec uvicorn server:app --host 0.0.0.0 --port 3000

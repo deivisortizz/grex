@@ -34,7 +34,7 @@ COPY --from=frontend-builder /frontend/dist ./dist
 RUN chmod +x start.sh
 
 # Expor as portas usadas pelos WebSockets e HTTP
-EXPOSE 8765 8766 8000
+EXPOSE 8765 8766 3000
 
 # Entrypoint
 CMD ["/bin/bash", "start.sh"]
