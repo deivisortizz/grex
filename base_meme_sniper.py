@@ -544,20 +544,28 @@ class BaseMemeSniper:
             tx_params = {
                 'from': account.address,
                 'nonce': int(nonce),
-                'gas': 250000,
+                'gas': 350000,
                 'gasPrice': int(gas_price),
                 'chainId': 8453
             }
+            tx_params = {k: v for k, v in tx_params.items() if v is not None}
             
-            # Usar SupportingFeeOnTransferTokens para evitar falhas com tokens de taxa
-            tx = await router.functions.swapExactTokensForETHSupportingFeeOnTransferTokens(
-                int(amount_to_sell),
-                int(amount_out_min),
-                path,
-                account.address,
-                int(deadline)
-            ).build_transaction(tx_params)
-            
+            try:
+                # Usar SupportingFeeOnTransferTokens para evitar falhas com tokens de taxa
+                tx = await router.functions.swapExactTokensForETHSupportingFeeOnTransferTokens(
+                    int(amount_to_sell),
+                    0,
+                    path,
+                    account.address,
+                    int(time.time()) + 300
+                ).build_transaction(tx_params)
+            except Exception as e:
+                import traceback
+                logger.error(f"❌ [ERRO NO BUILD_TRANSACTION - VENDA] Falha ao construir transação.")
+                print(traceback.format_exc())
+                return
+                
+            print(f"[DEBUG TX VENDA]: {tx}")
             # Remove qualquer None residual
             tx = {k: v for k, v in tx.items() if v is not None}
             
@@ -826,21 +834,27 @@ class BaseMemeSniper:
             tx_params = {
                 'from': account.address,
                 'value': int(amount_in_wei),
-                'nonce': int(nonce),
-                'gas': int(estimated_gas_limit),
+                'gas': 300000,
                 'gasPrice': int(gas_price),
+                'nonce': int(nonce),
                 'chainId': 8453
             }
             
-            tx = await router.functions.swapExactETHForTokens(
-                int(amount_out_min),
-                path,
-                account.address,
-                int(deadline)
-            ).build_transaction(tx_params)
+            # Remove qualquer None residual garantido
+            tx_params = {k: v for k, v in tx_params.items() if v is not None}
             
-            # Remove qualquer None residual
-            tx = {k: v for k, v in tx.items() if v is not None}
+            try:
+                tx = await router.functions.swapExactETHForTokens(
+                    0,
+                    path,
+                    account.address,
+                    int(time.time()) + 300
+                ).build_transaction(tx_params)
+            except Exception as e:
+                import traceback
+                logger.error(f"❌ [ERRO NO BUILD_TRANSACTION] Falha ao construir transação.")
+                print(traceback.format_exc())
+                return
             
             start_time = time.time()
             print(f"[DEBUG TX COMPRA]: {tx}")
