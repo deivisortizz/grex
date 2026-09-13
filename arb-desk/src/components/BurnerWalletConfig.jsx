@@ -10,8 +10,11 @@ export default function BurnerWalletConfig() {
   const wsRef = useRef(null)
 
   useEffect(() => {
-    // Configura a URL dinamicamente via ENV ou fallback para localhost
-    const wsUrl = import.meta.env.VITE_SNIPER_WS_URL || 'ws://localhost:8766'
+    // Configura a URL dinamicamente via ENV ou usando window.location
+    const host = window.location.hostname;
+    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const defaultWsUrl = `${wsProtocol}//${host}:8766`;
+    const wsUrl = import.meta.env.VITE_SNIPER_WS_URL || defaultWsUrl;
     const ws = new WebSocket(wsUrl)
     wsRef.current = ws
 

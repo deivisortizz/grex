@@ -30,13 +30,11 @@ function App() {
   const wsRef = useRef(null)
 
   useEffect(() => {
-    // Detecta se está local, ou usa WSS em produção dinamicamente
-    const currentHost = window.location.hostname
-    const defaultWsUrl = currentHost === 'localhost' || currentHost === '127.0.0.1' 
-      ? 'ws://localhost:8765' 
-      : `wss://${currentHost}/ws` // ou wss://api.seudominio.com dependendo do Easypanel
-
-    const wsUrl = import.meta.env.VITE_WS_URL || defaultWsUrl
+    const currentHost = window.location.hostname;
+    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const defaultWsUrl = `${wsProtocol}//${currentHost}:8765`;
+    const wsUrl = import.meta.env.VITE_WS_URL || defaultWsUrl;
+    
     const ws = new WebSocket(wsUrl)
     wsRef.current = ws
     let pingInterval;

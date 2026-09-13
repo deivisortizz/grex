@@ -12,7 +12,11 @@ export function useSniperWebSocket() {
   const wsRef = useRef(null)
 
   const connect = useCallback(() => {
-    const wsUrl = import.meta.env.VITE_SNIPER_WS_URL || 'ws://localhost:8766'
+    const host = window.location.hostname;
+    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const defaultWsUrl = `${wsProtocol}//${host}:8766`;
+    const wsUrl = import.meta.env.VITE_SNIPER_WS_URL || defaultWsUrl;
+    
     const ws = new WebSocket(wsUrl)
     wsRef.current = ws
 
