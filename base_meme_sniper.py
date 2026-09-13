@@ -481,14 +481,21 @@ class BaseMemeSniper:
                 router_addr, int(INFINITE_APPROVE)
             ).build_transaction(tx_params)
 
+            # Segurança contra conflito Legacy vs EIP-1559
+            if 'maxFeePerGas' in approve_tx and 'gasPrice' in approve_tx:
+                del approve_tx['gasPrice']
+
+            # Remove qualquer None residual
+            approve_tx = {k: v for k, v in approve_tx.items() if v is not None}
+
             try:
-                signed = self.w3_http.eth.account.sign_transaction(approve_tx, self.private_key)
+                signed = self.w3_http.eth.account.sign_transaction(approve_tx, private_key=self.private_key)
                 # Tenta usar raw_transaction (Web3 v6) ou rawTransaction (v5)
                 raw_tx = getattr(signed, 'raw_transaction', getattr(signed, 'rawTransaction', None))
                 tx_hash = await self.w3_http.eth.send_raw_transaction(raw_tx)
                 logger.info(f"✅ [APPROVE] Allowance infinita enviada para o Router | TX: {tx_hash.hex()}")
             except Exception as e:
-                logger.error(f"❌ [APPROVE EVM ERROR] Falha ao enviar transação. TX payload: {approve_tx} | Erro: {e}")
+                logger.error(f"❌ [APPROVE EVM ERROR] Falha ao assinar/enviar. TX payload limpo: {approve_tx} | Erro: {e}")
             
         except Exception as e:
             logger.error(f"❌ [APPROVE] Falha ao preparar approve: {e}")
@@ -556,13 +563,20 @@ class BaseMemeSniper:
                 int(deadline)
             ).build_transaction(tx_params)
             
+            # Segurança contra conflito Legacy vs EIP-1559
+            if 'maxFeePerGas' in tx and 'gasPrice' in tx:
+                del tx['gasPrice']
+
+            # Remove qualquer None residual
+            tx = {k: v for k, v in tx.items() if v is not None}
+            
             try:
-                signed_tx = self.w3_http.eth.account.sign_transaction(tx, self.private_key)
+                signed_tx = self.w3_http.eth.account.sign_transaction(tx, private_key=self.private_key)
                 raw_tx = getattr(signed_tx, 'raw_transaction', getattr(signed_tx, 'rawTransaction', None))
                 tx_hash = await self.w3_http.eth.send_raw_transaction(raw_tx)
                 logger.info(f"✅ [VENDA ENVIADA] {sell_percentage}% liquidado | TX Hash: {tx_hash.hex()}")
             except Exception as e:
-                logger.error(f"❌ [FALHA NA VENDA EVM] TX payload: {tx} | Erro: {e}")
+                logger.error(f"❌ [FALHA NA VENDA EVM] TX payload limpo: {tx} | Erro: {e}")
             
         except Exception as e:
             logger.error(f"❌ [FALHA NA VENDA] Erro ao tentar preparar venda de {target_token}: {e}")
@@ -831,11 +845,18 @@ class BaseMemeSniper:
                 int(deadline)
             ).build_transaction(tx_params)
             
+            # Segurança contra conflito Legacy vs EIP-1559
+            if 'maxFeePerGas' in tx and 'gasPrice' in tx:
+                del tx['gasPrice']
+
+            # Remove qualquer None residual
+            tx = {k: v for k, v in tx.items() if v is not None}
+            
             start_time = time.time()
             
             try:
                 # 7. Assinatura Offline na RAM
-                signed_tx = self.w3_http.eth.account.sign_transaction(tx, self.private_key)
+                signed_tx = self.w3_http.eth.account.sign_transaction(tx, private_key=self.private_key)
                 
                 # 8. Disparo
                 raw_tx = getattr(signed_tx, 'raw_transaction', getattr(signed_tx, 'rawTransaction', None))
@@ -853,7 +874,7 @@ class BaseMemeSniper:
                 # 10. Inicia Monitoramento de Posição (TP/SL) em background
                 asyncio.create_task(self.monitor_position(target_token, amount_in_wei, expected_out))
             except Exception as e:
-                logger.error(f"❌ [FALHA DE EXECUÇÃO EVM] Erro ao enviar a compra. TX Payload: {tx} | Erro: {e}")
+                logger.error(f"❌ [FALHA DE EXECUÇÃO EVM] Erro ao enviar a compra. TX Payload Limpo: {tx} | Erro: {e}")
                 
         except Exception as e:
             logger.error(f"❌ [FALHA DE EXECUÇÃO] Erro crítico na preparação do Sniper: {e}")
