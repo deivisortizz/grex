@@ -14,8 +14,9 @@ from cryptography.fernet import Fernet
 env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
 load_dotenv(dotenv_path=env_path)
 
-# Pasta de dados com suporte a Docker Volume
-DATA_DIR = os.getenv('DATA_DIR', os.path.dirname(os.path.abspath(__file__)))
+# Pasta de dados com suporte a Docker Volume (persistência de DBs e chaves)
+DATA_DIR = os.getenv('DATA_DIR', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data'))
+os.makedirs(DATA_DIR, exist_ok=True)
 
 logging.basicConfig(
     level=logging.INFO,

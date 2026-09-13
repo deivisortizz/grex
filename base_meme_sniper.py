@@ -18,7 +18,9 @@ from web3 import AsyncWeb3, WebSocketProvider, AsyncHTTPProvider
 env_path = Path(__file__).parent / '.env'
 load_dotenv(dotenv_path=env_path)
 
-DATA_DIR = os.getenv('DATA_DIR', os.path.dirname(os.path.abspath(__file__)))
+# Pasta de dados com suporte a Docker Volume (persistência de DBs e chaves)
+DATA_DIR = os.getenv('DATA_DIR', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data'))
+os.makedirs(DATA_DIR, exist_ok=True)
 
 # Suporte a dois padrões de nomenclatura de env vars:
 # Legado: BASE_WSS_RPC / BASE_HTTP_RPC

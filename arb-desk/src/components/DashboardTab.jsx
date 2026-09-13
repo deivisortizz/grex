@@ -11,7 +11,7 @@ const INITIAL_EXCHANGES = [
 export default function DashboardTab({ marketData }) {
   return (
     <>
-      <div className="flex gap-4 items-center mb-8">
+      <div className="flex flex-wrap gap-4 items-center mb-8">
         {marketData.net_spread !== undefined && (
           <div className="px-4 py-2 bg-zinc-900 border border-zinc-800 rounded-lg text-sm text-zinc-400">
             Best Net Spread: <strong className={marketData.net_spread > 0 ? "text-emerald-400" : "text-rose-400"}>{marketData.net_spread.toFixed(2)}%</strong>

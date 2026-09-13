@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import { Menu } from 'lucide-react'
 import Sidebar from './components/Sidebar'
 import DashboardTab from './components/DashboardTab'
 import ConfigTab from './components/ConfigTab'
@@ -12,6 +13,8 @@ import Login from './components/Login'
 import SniperDashboard from './components/sniper/SniperDashboard'
 
 function App() {
+  // Controle do menu mobile
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
   // Estado de autenticação persistido
   const [isAuthenticated, setIsAuthenticated] = useState(
     localStorage.getItem('arb_auth') === 'true'
@@ -116,12 +119,34 @@ function App() {
   }
 
   return (
-    <div className="min-h-screen bg-zinc-950 flex font-sans text-zinc-100">
-      <Sidebar wsStatus={wsStatus} ping={ping} activeTab={activeTab} setActiveTab={setActiveTab} />
+    <div className="min-h-screen bg-zinc-950 flex font-sans text-zinc-100 overflow-x-hidden">
+      <Sidebar 
+        wsStatus={wsStatus} 
+        ping={ping} 
+        activeTab={activeTab} 
+        setActiveTab={(tab) => {
+          setActiveTab(tab)
+          setIsMobileMenuOpen(false)
+        }} 
+        isOpen={isMobileMenuOpen}
+        setIsOpen={setIsMobileMenuOpen}
+      />
 
       {/* Main Content Area */}
-      <main className="flex-1 ml-64 p-8 overflow-y-auto h-screen">
-        <header className="mb-8 border-b border-zinc-800 pb-6">
+      <main className="flex-1 md:ml-64 p-4 md:p-8 overflow-y-auto h-screen max-w-full overflow-x-hidden">
+        {/* Mobile Header with Hamburger */}
+        <div className="md:hidden flex items-center justify-between mb-6 pb-4 border-b border-zinc-800">
+          <h2 className="text-2xl font-bold tracking-tight text-white">{activeTab}</h2>
+          <button 
+            onClick={() => setIsMobileMenuOpen(true)}
+            className="p-2 bg-zinc-800 rounded-lg text-zinc-300 hover:text-white"
+          >
+            <Menu size={24} />
+          </button>
+        </div>
+        
+        {/* Desktop Header */}
+        <header className="hidden md:block mb-8 border-b border-zinc-800 pb-6">
           <h2 className="text-3xl font-bold tracking-tight text-white">{activeTab}</h2>
         </header>
 

@@ -82,31 +82,31 @@ function SniperContent() {
       <SniperMetrics />
 
       {/* ── Status Bar ── */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
 
         {/* WS Connection */}
         <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 flex items-center gap-3">
           {isConnected ? (
             <>
-              <div className="w-10 h-10 rounded-xl bg-emerald-500/10 flex items-center justify-center">
+              <div className="w-10 h-10 rounded-xl bg-emerald-500/10 flex items-center justify-center shrink-0">
                 <Wifi size={20} className="text-emerald-400" />
               </div>
-              <div>
-                <p className="text-xs text-zinc-500">Sniper WS</p>
+              <div className="min-w-0">
+                <p className="text-xs text-zinc-500 truncate">Sniper WS</p>
                 <div className="flex items-center gap-1.5">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                  <span className="text-sm font-bold text-emerald-400">Online</span>
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse shrink-0" />
+                  <span className="text-sm font-bold text-emerald-400 truncate">Online</span>
                 </div>
               </div>
             </>
           ) : (
             <>
-              <div className="w-10 h-10 rounded-xl bg-rose-500/10 flex items-center justify-center">
+              <div className="w-10 h-10 rounded-xl bg-rose-500/10 flex items-center justify-center shrink-0">
                 <WifiOff size={20} className="text-rose-400" />
               </div>
-              <div>
-                <p className="text-xs text-zinc-500">Sniper WS</p>
-                <span className="text-sm font-bold text-rose-400">Offline</span>
+              <div className="min-w-0">
+                <p className="text-xs text-zinc-500 truncate">Sniper WS</p>
+                <span className="text-sm font-bold text-rose-400 truncate">Offline</span>
               </div>
             </>
           )}
@@ -114,54 +114,58 @@ function SniperContent() {
 
         {/* Network */}
         <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-blue-500/10 flex items-center justify-center">
+          <div className="w-10 h-10 rounded-xl bg-blue-500/10 flex items-center justify-center shrink-0">
             <Layers size={20} className="text-blue-400" />
           </div>
-          <div>
-            <p className="text-xs text-zinc-500">Rede</p>
-            <span className="text-sm font-bold text-blue-400">Base Mainnet</span>
+          <div className="min-w-0">
+            <p className="text-xs text-zinc-500 truncate">Rede</p>
+            <span className="text-sm font-bold text-blue-400 truncate">Base Mainnet</span>
           </div>
         </div>
 
         {/* Pools Detected */}
         <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-amber-500/10 flex items-center justify-center">
+          <div className="w-10 h-10 rounded-xl bg-amber-500/10 flex items-center justify-center shrink-0">
             <Crosshair size={20} className="text-amber-400" />
           </div>
-          <div>
-            <p className="text-xs text-zinc-500">Pools Detectados</p>
-            <span className="text-2xl font-bold font-mono text-white">{pools.length}</span>
+          <div className="min-w-0">
+            <p className="text-xs text-zinc-500 truncate">Pools Detectados</p>
+            <span className="text-2xl font-bold font-mono text-white truncate">{pools.length}</span>
           </div>
         </div>
 
         {/* Wallet */}
         <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 flex items-center gap-3">
-          <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${walletStatus ? 'bg-emerald-500/10' : 'bg-zinc-800'}`}>
+          <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${walletStatus ? 'bg-emerald-500/10' : 'bg-zinc-800'}`}>
             <Wallet size={20} className={walletStatus ? 'text-emerald-400' : 'text-zinc-500'} />
           </div>
-          <div>
-            <p className="text-xs text-zinc-500">Wallet</p>
+          <div className="min-w-0">
+            <p className="text-xs text-zinc-500 truncate">Wallet</p>
             {walletStatus ? (
-              <span className="text-sm font-bold text-emerald-400 font-mono">
+              <span className="text-sm font-bold text-emerald-400 font-mono truncate block">
                 {maskAddress(walletStatus)}
               </span>
             ) : (
-              <span className="text-sm font-bold text-amber-400">Read-Only</span>
+              <span className="text-sm font-bold text-amber-400 truncate">Read-Only</span>
             )}
           </div>
         </div>
       </div>
 
       {/* ── Positions Table (Full Width) ── */}
-      <div className="h-[280px]">
-        <SniperPositionsTable />
+      <div className="h-[280px] overflow-x-auto">
+        <div className="min-w-[800px] h-full">
+          <SniperPositionsTable />
+        </div>
       </div>
 
       {/* ── Main Grid: Pool Feed + Risk Form ── */}
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
         {/* Pool Feed – 2/3 */}
-        <div className="xl:col-span-2 h-[420px]">
-          <PoolFeedTable />
+        <div className="xl:col-span-2 h-[420px] overflow-x-auto">
+          <div className="min-w-[800px] h-full">
+            <PoolFeedTable />
+          </div>
         </div>
 
         {/* Risk Form + Wallet – 1/3 */}
@@ -172,8 +176,10 @@ function SniperContent() {
       </div>
 
       {/* ── Terminal ── */}
-      <div className="h-72">
-        <SniperTerminal />
+      <div className="h-72 overflow-x-auto">
+        <div className="min-w-[600px] h-full">
+          <SniperTerminal />
+        </div>
       </div>
     </div>
   )

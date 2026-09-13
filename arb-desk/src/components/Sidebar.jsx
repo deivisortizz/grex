@@ -22,9 +22,19 @@ const navItems = [
   { name: 'Guia de Ativação', icon: HelpCircle },
 ]
 
-export default function Sidebar({ wsStatus = 'Offline', ping, activeTab, setActiveTab }) {
+export default function Sidebar({ wsStatus = 'Offline', ping, activeTab, setActiveTab, isOpen, setIsOpen }) {
   return (
-    <aside className="w-64 bg-zinc-900 border-r border-zinc-800 flex flex-col h-screen fixed top-0 left-0">
+    <>
+      {/* Mobile overlay */}
+      {isOpen && (
+        <div 
+          className="fixed inset-0 bg-black/60 z-40 md:hidden backdrop-blur-sm"
+          onClick={() => setIsOpen(false)}
+        />
+      )}
+      
+      {/* Sidebar container */}
+      <aside className={`w-64 bg-zinc-900 border-r border-zinc-800 flex flex-col h-screen fixed top-0 left-0 z-50 transition-transform duration-300 ease-in-out md:translate-x-0 ${isOpen ? 'translate-x-0' : '-translate-x-full'}`}>
       <div className="p-6">
         <div className="flex items-center justify-between">
           <h1 className="text-2xl font-bold tracking-wider text-white">Grex <span className="text-emerald-500">.</span></h1>
@@ -94,5 +104,6 @@ export default function Sidebar({ wsStatus = 'Offline', ping, activeTab, setActi
         </div>
       </div>
     </aside>
+    </>
   )
 }
