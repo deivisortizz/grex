@@ -27,7 +27,7 @@ os.makedirs(DATA_DIR, exist_ok=True)
 # Novo (Docker/Coolify): BASE_RPC_WS / BASE_RPC_HTTP
 BASE_WSS_RPC   = os.getenv('BASE_RPC_WS')   or os.getenv('BASE_WSS_RPC')
 BASE_HTTP_RPC  = os.getenv('BASE_RPC_HTTP')  or os.getenv('BASE_HTTP_RPC')
-ROUTER_ADDRESS = os.getenv('ROUTER_ADDRESS')
+ROUTER_ADDRESS = os.getenv('ROUTER_ADDRESS', '0x4752ba5DBc23f44D87826276BF6Fd6b1C372aD24')
 SNIPER_WS_PORT = int(os.getenv('SNIPER_WS_PORT', 8766))
 
 logging.basicConfig(
