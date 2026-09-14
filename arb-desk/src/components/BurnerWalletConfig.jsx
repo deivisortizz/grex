@@ -11,6 +11,30 @@ export default function BurnerWalletConfig() {
   
   const wsRef = useRef(null)
 
+  // Busca o status inicial da carteira via API REST ao carregar a página
+  useEffect(() => {
+    const fetchWallet = async () => {
+      try {
+        const token = localStorage.getItem('token')
+        if (!token) return
+        
+        const res = await fetch('/api/user/wallet', {
+          headers: { 'Authorization': `Bearer ${token}` }
+        })
+        
+        if (res.ok) {
+          const data = await res.json()
+          if (data.address) {
+            setWalletStatus(data.address)
+          }
+        }
+      } catch (err) {
+        console.error("Erro ao buscar wallet salva:", err)
+      }
+    }
+    fetchWallet()
+  }, [])
+
   useEffect(() => {
     // Configura a URL dinamicamente via window.location (ignora hardcoded .env)
     const host = window.location.hostname;
