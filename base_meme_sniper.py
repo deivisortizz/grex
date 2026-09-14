@@ -221,25 +221,33 @@ class BaseMemeSniper:
             self.w3_http = AsyncWeb3(AsyncHTTPProvider(BASE_HTTP_RPC))
         
         self.cipher = None
-        self.wallet_address = None
-        self.private_key = None
-        self.is_active = True
-        self.daily_pnl_usd = 0.0
+        
+        # Gestão Multi-Tenant: agrupa wallet, PK, config, posições e status por user_id
+        self.user_states = {}
+        
         self.max_daily_loss_usd = float(os.getenv('MAX_DAILY_LOSS_USD', 10.00))
         self.eth_usd_price = float(os.getenv('ETH_PRICE_USD', 3500.0))
         
-        # Gestão Dinâmica (Controlado pelo React HFT)
-        self.config = {
-            'snipe_size_eth': 0.0005,
-            'min_pool_weth': 0.05,
-            'tp_pct': 100,
-            'sl_pct': 20
-        }
-        self.open_positions = {}
-        self.total_trades = 0
-        self.win_trades = 0
-        
         self.connected_clients = set()
+
+    def _get_user_state(self, user_id):
+        if user_id not in self.user_states:
+            self.user_states[user_id] = {
+                'wallet_address': None,
+                'private_key': None,
+                'config': {
+                    'snipe_size_eth': 0.0005,
+                    'min_pool_weth': 0.05,
+                    'tp_pct': 100,
+                    'sl_pct': 20
+                },
+                'is_active': False,
+                'open_positions': {},
+                'total_trades': 0,
+                'win_trades': 0,
+                'daily_pnl_usd': 0.0
+            }
+        return self.user_states[user_id]
         
         # Conecta os logs do backend ao WebSocket do frontend
         ws_logger = WSLogHandler(self)
@@ -336,16 +344,31 @@ class BaseMemeSniper:
 
             conn.commit()
 
-    def _sync_get_wallet(self):
+    def _sync_load_all_data(self):
         db_path = os.path.join(DATA_DIR, 'sniper.db')
         with sqlite3.connect(db_path) as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM burner_wallet LIMIT 1")
-            row = cursor.fetchone()
-            if row:
-                return dict(row)
-            return None
+            
+            # Carrega todas as Wallets Multi-Tenant
+            cursor.execute("SELECT * FROM burner_wallet WHERE user_id IS NOT NULL")
+            wallets = cursor.fetchall()
+            for w in wallets:
+                state = self._get_user_state(w['user_id'])
+                state['wallet_address'] = w['address']
+                state['private_key'] = self.decrypt_val(w['pk_encrypted'])
+                
+            # Carrega todos os Configs Multi-Tenant
+            cursor.execute("SELECT * FROM user_configs")
+            configs = cursor.fetchall()
+            for c in configs:
+                state = self._get_user_state(c['user_id'])
+                state['config'].update({
+                    'snipe_size_eth': c['snipe_size_eth'],
+                    'min_pool_weth': c['min_pool_weth'],
+                    'tp_pct': c['tp_pct'],
+                    'sl_pct': c['sl_pct']
+                })
 
     def _sync_save_wallet(self, address, private_key, user_id=None):
         enc_pk = self.encrypt_val(private_key)
@@ -376,24 +399,19 @@ class BaseMemeSniper:
                 WHERE user_id = ?
             ''', (
                 config_dict.get('snipe_size_eth', 0.005),
-                config_dict.get('min_pool_weth', 0.05),
+                config_dict.get('min_pool_weth', 0.005),
                 config_dict.get('tp_pct', 50.0),
                 config_dict.get('sl_pct', 15.0),
                 user_id
             ))
             conn.commit()
 
-    async def load_wallet(self):
+    async def load_all_data(self):
         """
         Isolamento de operações bloqueantes de I/O via to_thread.
         """
-        row = await asyncio.to_thread(self._sync_get_wallet)
-        if row:
-            self.wallet_address = row['address']
-            self.private_key = self.decrypt_val(row['pk_encrypted'])
-            logger.info(f"🟢 [COFRE] Burner Wallet carregada pronta para Snipe: {self.wallet_address}")
-        else:
-            logger.warning("⚠️ Nenhuma wallet configurada no banco de dados. Modo leitura ativo.")
+        await asyncio.to_thread(self._sync_load_all_data)
+        logger.info(f"🟢 [COFRE] Dados multi-tenant carregados para {len(self.user_states)} usuários ativos no banco de dados.")
 
     # ---------------------------------------------------------
     # Motor HFT Assíncrono Web3
@@ -462,20 +480,26 @@ class BaseMemeSniper:
             if meme_token:
                 logger.info(f"⚡ [NOVO MEME DETECTADO] Liquidez Criada | Token: {meme_token}")
                 
-                # Broadcast para a UI do React (informa se a execução foi pulada por estar pausado)
-                await self.broadcast_ws({
-                    "type": "new_pool",
-                    "token": meme_token,
-                    "paired_with": "WETH",
-                    "timestamp": int(time.time() * 1000),
-                    "skipped": not self.is_active
-                })
-                
-                if not self.is_active:
-                    logger.info(f"⏸️ [SNIPER PAUSADO] Compra ignorada para {meme_token} (robô está desligado/pausado).")
-                    return
-                
-                await self.execute_swap(meme_token, pair_address=pair_address)
+                # Para cada usuário cadastrado e com estado carregado
+                for user_id, state in self.user_states.items():
+                    # Informa o dashboard do usuário
+                    asyncio.create_task(
+                        self.broadcast_ws({
+                            "type": "new_pool",
+                            "token": meme_token,
+                            "paired_with": "WETH",
+                            "timestamp": int(time.time() * 1000),
+                            "skipped": not state['is_active']
+                        }, target_user_id=user_id)
+                    )
+                    
+                    if not state['is_active']:
+                        logger.info(f"⏸️ [SNIPER PAUSADO] Compra ignorada para {meme_token} (User: {user_id}).")
+                        continue
+                    
+                    # Dispara o Snipe de forma não-bloqueante para este usuário
+                    asyncio.create_task(self.execute_swap(meme_token, user_id=user_id, pair_address=pair_address))
+                    
             else:
                 logger.info(f"⚪ Par ignorado (Não envelopa WETH). Tokens: {token0} / {token1}")
             
@@ -491,17 +515,21 @@ class BaseMemeSniper:
             logger.error(f"❌ [SIMULAÇÃO] Falha ao estimar retorno de tokens: {e}")
             return 0
 
-    async def anti_honeypot_check(self, target_token, amount_in_wei, expected_tokens_out) -> bool:
+    async def anti_honeypot_check(self, target_token, amount_in_wei, expected_tokens_out, user_id=None) -> bool:
         """
         Simula estaticamente uma VENDA de 100% dos tokens via eth_call.
         Se o contrato reverter, bloqueia o Snipe antes de gastar qualquer gwei.
         Retorna True se PASSAR na verificação, False se for Honeypot.
         """
+        if not user_id:
+            return False
+        state = self.user_states.get(user_id)
+        
         WETH_BASE = self.w3_http.to_checksum_address("0x4200000000000000000000000000000000000006")
         target_token_checksum = self.w3_http.to_checksum_address(target_token)
         router_addr = self.w3_http.to_checksum_address(ROUTER_ADDRESS)
         router = self.w3_http.eth.contract(address=router_addr, abi=ROUTER_ABI)
-        account = self.w3_http.eth.account.from_key(self.private_key)
+        account = self.w3_http.eth.account.from_key(state['private_key'])
         
         sell_path = [target_token_checksum, WETH_BASE]
         deadline = int(time.time()) + 60
@@ -532,29 +560,32 @@ class BaseMemeSniper:
             
             if is_honeypot:
                 logger.warning(
-                    f"⚠️ [ANTI-HONEYPOT] Token identificado como Honeypot/Bloqueado para venda. "
-                    f"Snipe cancelado. | Token: {target_token} | Razão: {str(e)[:80]}"
+                    f"⚠️ [FILTRO - HONEYPOT] Token identificado como Honeypot/Bloqueado para venda. "
+                    f"Snipe cancelado. | Token: {target_token} | Razão: {str(e)[:80]} (User {user_id})"
                 )
             else:
                 # Pode ser falta de liquidez para venda, ou approve não dado ainda
                 logger.warning(
-                    f"⚠️ [ANTI-HONEYPOT] Simulação de venda falhou (motivo inesperado). "
-                    f"Snipe cancelado por precaução. | Detalhe: {str(e)[:120]}"
+                    f"⚠️ [FILTRO - HONEYPOT] Simulação de venda falhou (motivo inesperado). "
+                    f"Snipe cancelado por precaução. | Detalhe: {str(e)[:120]} (User {user_id})"
                 )
             return False
 
-    async def auto_approve_router(self, target_token):
+    async def auto_approve_router(self, target_token, user_id=None):
         """
         Envia um Approve de limite infinito para o Router após a compra
         para permitir futuras vendas sem precisar de uma transação extra.
         """
+        if not user_id: return
+        state = self.user_states.get(user_id)
+        
         INFINITE_APPROVE = 2**256 - 1
         router_addr = self.w3_http.to_checksum_address(ROUTER_ADDRESS)
         token_contract = self.w3_http.eth.contract(
             address=self.w3_http.to_checksum_address(target_token),
             abi=ERC20_ABI
         )
-        account = self.w3_http.eth.account.from_key(self.private_key)
+        account = self.w3_http.eth.account.from_key(state['private_key'])
         
         try:
             # Verifica se já tem allowance infinita para evitar TX desnecessária
@@ -587,7 +618,7 @@ class BaseMemeSniper:
 
             print(f"[DEBUG TX APPROVE]: {approve_tx}")
             try:
-                signed = self.w3_http.eth.account.sign_transaction(approve_tx, private_key=self.private_key)
+                signed = self.w3_http.eth.account.sign_transaction(approve_tx, private_key=state['private_key'])
                 
                 try:
                     raw_tx = signed.rawTransaction
@@ -606,21 +637,24 @@ class BaseMemeSniper:
             logger.error(f"❌ [APPROVE] Falha ao preparar approve: {e}")
 
 
-    async def execute_sell(self, target_token, sell_percentage=100):
+    async def execute_sell(self, target_token, sell_percentage=100, user_id=None):
         """
         Executa a venda de uma porcentagem do saldo do token alvo.
         """
-        if not self.private_key:
+        if not user_id: return
+        state = self.user_states.get(user_id)
+        
+        if not state['private_key']:
             return
             
-        logger.info(f"🔄 [VENDA] Iniciando venda de {sell_percentage}% de {target_token}...")
+        logger.info(f"🔄 [VENDA] Iniciando venda de {sell_percentage}% de {target_token}... (User {user_id})")
         
         try:
             WETH_BASE = self.w3_http.to_checksum_address("0x4200000000000000000000000000000000000006")
             target_token_checksum = self.w3_http.to_checksum_address(target_token)
             
             token_contract = self.w3_http.eth.contract(address=target_token_checksum, abi=ERC20_ABI)
-            account = self.w3_http.eth.account.from_key(self.private_key)
+            account = self.w3_http.eth.account.from_key(state['private_key'])
             
             # Checar saldo
             balance = await token_contract.functions.balanceOf(account.address).call()
@@ -676,7 +710,7 @@ class BaseMemeSniper:
             
             print(f"[DEBUG TX]: {tx}")
             try:
-                signed_tx = self.w3_http.eth.account.sign_transaction(tx, private_key=self.private_key)
+                signed_tx = self.w3_http.eth.account.sign_transaction(tx, private_key=state['private_key'])
                 
                 try:
                     raw_tx = signed_tx.rawTransaction
@@ -694,10 +728,14 @@ class BaseMemeSniper:
         except Exception as e:
             logger.error(f"❌ [FALHA NA VENDA] Erro ao tentar preparar venda de {target_token}: {e}")
 
-    async def monitor_position(self, target_token, entry_price_wei, initial_expected_out):
+    async def monitor_position(self, target_token, entry_price_wei, initial_expected_out, user_id=None):
         """
         Monitora a posição a cada segundo para realizar lucros (TP), aplicar Trailing Stop (TS) ou Stop Loss (SL).
         """
+        if not user_id: return
+        state = self.user_states.get(user_id)
+        if not state: return
+        
         logger.info(f"📈 [MONITOR] Iniciando acompanhamento de preço para {target_token}...")
         
         # Espera para garantir que a TX de compra foi minerada e os tokens estão no saldo
@@ -711,7 +749,7 @@ class BaseMemeSniper:
         path = [target_token_checksum, WETH_BASE]
         
         token_contract = self.w3_http.eth.contract(address=target_token_checksum, abi=ERC20_ABI)
-        account = self.w3_http.eth.account.from_key(self.private_key)
+        account = self.w3_http.eth.account.from_key(state['private_key'])
         
         balance = await token_contract.functions.balanceOf(account.address).call()
         if balance == 0:
@@ -723,7 +761,7 @@ class BaseMemeSniper:
 
         logger.info(f"📊 [MONITOR] Saldo inicial: {balance} tokens. Valor entrada: {entry_price_wei} wei")
 
-        self.open_positions[target_token] = {
+        state['open_positions'][target_token] = {
             "token": target_token,
             "entry_price": entry_price_wei,
             "highest_price": entry_price_wei,
@@ -731,8 +769,8 @@ class BaseMemeSniper:
             "pnl_pct": 0.0
         }
 
-        while self.is_active:
-            if target_token not in self.open_positions:
+        while state['is_active']:
+            if target_token not in state['open_positions']:
                 break # Vendida via panic sell ou outra task
                 
             try:
@@ -746,28 +784,28 @@ class BaseMemeSniper:
                 
                 # Atualiza state da posição e propaga via WS
                 pnl_pct = ((current_eth_value - entry_price_wei) / entry_price_wei) * 100
-                self.open_positions[target_token].update({
+                state['open_positions'][target_token].update({
                     "current_price": current_eth_value,
                     "highest_price": highest_eth_value,
                     "pnl_pct": round(pnl_pct, 2)
                 })
-                await self.broadcast_ws({"type": "open_positions", "positions": list(self.open_positions.values())})
+                await self.broadcast_ws({"type": "open_positions", "positions": list(state['open_positions'].values())}, target_user_id=user_id)
                 
-                tp_target = entry_price_wei * (1 + (float(self.config.get('tp_pct', 100)) / 100.0))
-                sl_target = entry_price_wei * (1 - (float(self.config.get('sl_pct', 20)) / 100.0))
+                tp_target = entry_price_wei * (1 + (float(state['config'].get('tp_pct', 100)) / 100.0))
+                sl_target = entry_price_wei * (1 - (float(state['config'].get('sl_pct', 20)) / 100.0))
                 
                 # Take-Profit
                 if current_eth_value >= tp_target and not tp_triggered:
-                    logger.info(f"💰 [TAKE PROFIT] Alvo de {self.config.get('tp_pct')}% atingido! Liquidando 50% de {target_token}...")
+                    logger.info(f"💰 [TAKE PROFIT] Alvo de {state['config'].get('tp_pct')}% atingido! Liquidando 50% de {target_token}...")
                     tp_triggered = True
-                    await self.execute_sell(target_token, sell_percentage=50)
+                    await self.execute_sell(target_token, sell_percentage=50, user_id=user_id)
                     
                     realized_pnl_wei = (current_eth_value / 2) - (entry_price_wei / 2)
                     realized_pnl_usd = (realized_pnl_wei / 1e18) * self.eth_usd_price
-                    self.daily_pnl_usd += realized_pnl_usd
-                    if realized_pnl_usd > 0: self.win_trades += 1
+                    state['daily_pnl_usd'] += realized_pnl_usd
+                    if realized_pnl_usd > 0: state['win_trades'] += 1
                     logger.info(f"💸 PnL parcial (TP): +${realized_pnl_usd:.2f} USD")
-                    await self.broadcast_ws({"type": "metrics_updated", "metrics": {"total_trades": self.total_trades, "win_trades": self.win_trades, "daily_pnl_usd": self.daily_pnl_usd}})
+                    await self.broadcast_ws({"type": "metrics_updated", "metrics": {"total_trades": state['total_trades'], "win_trades": state['win_trades'], "daily_pnl_usd": state['daily_pnl_usd']}}, target_user_id=user_id)
                     
                     await asyncio.sleep(5)
                     balance = await token_contract.functions.balanceOf(account.address).call()
@@ -781,43 +819,41 @@ class BaseMemeSniper:
                 # Trailing Stop: -15%
                 if current_eth_value <= highest_eth_value * 0.85:
                     logger.warning(f"📉 [TRAILING STOP] Preço caiu 15% do topo. Liquidando 100% de {target_token}...")
-                    await self.execute_sell(target_token, sell_percentage=100)
+                    await self.execute_sell(target_token, sell_percentage=100, user_id=user_id)
                     
                     realized_pnl_wei = current_eth_value - entry_price_wei
                     realized_pnl_usd = (realized_pnl_wei / 1e18) * self.eth_usd_price
-                    self.daily_pnl_usd += realized_pnl_usd
-                    if realized_pnl_usd > 0: self.win_trades += 1
+                    state['daily_pnl_usd'] += realized_pnl_usd
+                    if realized_pnl_usd > 0: state['win_trades'] += 1
                     logger.info(f"💸 PnL da operação (TS): ${realized_pnl_usd:.2f} USD")
-                    await self.broadcast_ws({"type": "metrics_updated", "metrics": {"total_trades": self.total_trades, "win_trades": self.win_trades, "daily_pnl_usd": self.daily_pnl_usd}})
+                    del state['open_positions'][target_token]
+                    await self.broadcast_ws({"type": "open_positions", "positions": list(state['open_positions'].values())}, target_user_id=user_id)
                     
-                    del self.open_positions[target_token]
-                    await self.broadcast_ws({"type": "open_positions", "positions": list(self.open_positions.values())})
-                    
-                    if self.daily_pnl_usd <= -self.max_daily_loss_usd:
-                        self.is_active = False
-                        logger.error(f"🛑 [CIRCUIT BREAKER] Limite de perda diária atingido. Compras automáticas suspensas.")
-                        asyncio.create_task(self.broadcast_ws({"type": "sniper_status", "is_active": self.is_active}))
+                    if state['daily_pnl_usd'] <= -self.max_daily_loss_usd:
+                        state['is_active'] = False
+                        logger.error(f"🛑 [CIRCUIT BREAKER] Limite de perda diária atingido. Compras automáticas suspensas. (User {user_id})")
+                        asyncio.create_task(self.broadcast_ws({"type": "sniper_status", "is_active": state['is_active']}, target_user_id=user_id))
                     break
 
                 # Stop-Loss: dinâmico
                 if current_eth_value <= sl_target:
                     logger.error(f"🛑 [STOP LOSS] Preço caiu para Stop Loss. Cortando perdas em {target_token}...")
-                    await self.execute_sell(target_token, sell_percentage=100)
+                    await self.execute_sell(target_token, sell_percentage=100, user_id=user_id)
                     
                     realized_pnl_wei = current_eth_value - entry_price_wei
                     realized_pnl_usd = (realized_pnl_wei / 1e18) * self.eth_usd_price
-                    self.daily_pnl_usd += realized_pnl_usd
-                    if realized_pnl_usd > 0: self.win_trades += 1
+                    state['daily_pnl_usd'] += realized_pnl_usd
+                    if realized_pnl_usd > 0: state['win_trades'] += 1
                     logger.info(f"💸 PnL da operação (SL): ${realized_pnl_usd:.2f} USD")
-                    await self.broadcast_ws({"type": "metrics_updated", "metrics": {"total_trades": self.total_trades, "win_trades": self.win_trades, "daily_pnl_usd": self.daily_pnl_usd}})
+                    await self.broadcast_ws({"type": "metrics_updated", "metrics": {"total_trades": state['total_trades'], "win_trades": state['win_trades'], "daily_pnl_usd": state['daily_pnl_usd']}}, target_user_id=user_id)
                     
-                    del self.open_positions[target_token]
-                    await self.broadcast_ws({"type": "open_positions", "positions": list(self.open_positions.values())})
+                    del state['open_positions'][target_token]
+                    await self.broadcast_ws({"type": "open_positions", "positions": list(state['open_positions'].values())}, target_user_id=user_id)
                     
-                    if self.daily_pnl_usd <= -self.max_daily_loss_usd:
-                        self.is_active = False
-                        logger.error(f"🛑 [CIRCUIT BREAKER] Limite de perda diária atingido. Compras automáticas suspensas.")
-                        asyncio.create_task(self.broadcast_ws({"type": "sniper_status", "is_active": self.is_active}))
+                    if state['daily_pnl_usd'] <= -self.max_daily_loss_usd:
+                        state['is_active'] = False
+                        logger.error(f"🛑 [CIRCUIT BREAKER] Limite de perda diária atingido. Compras automáticas suspensas. (User {user_id})")
+                        asyncio.create_task(self.broadcast_ws({"type": "sniper_status", "is_active": state['is_active']}, target_user_id=user_id))
                     break
                     
             except Exception as e:
@@ -869,22 +905,28 @@ class BaseMemeSniper:
             logger.debug(f"Aviso: Erro ao executar filtros estruturais: {e}")
             return True
 
-    async def execute_swap(self, target_token, force=False, pair_address=None):
+    async def execute_swap(self, target_token, force=False, pair_address=None, user_id=None):
         """
         Gera e assina a transação de compra (Snipe) com:
         - Anti-Honeypot check via eth.call antes do disparo
         - EIP-1559, slippage e roteamento V2
         - Auto-Approve do Router após compra confirmada
         """
-        if not self.is_active and not force:
-            logger.warning(f"⏸️ [SNIPER PAUSADO] Snipe abortado para {target_token}. O robô está pausado.")
+        if not user_id or user_id not in self.user_states:
+            logger.warning(f"❌ [ERRO] execute_swap chamado sem user_id válido.")
             return
 
-        if not self.private_key:
-            logger.warning(f"⚠️ Ignorando snipe no token {target_token}. Burner wallet inexistente.")
+        state = self.user_states[user_id]
+
+        if not state['is_active'] and not force:
+            logger.warning(f"⏸️ [SNIPER PAUSADO] Snipe abortado para {target_token}. O robô está pausado. (User {user_id})")
+            return
+
+        if not state['private_key']:
+            logger.warning(f"⚠️ Ignorando snipe no token {target_token}. Burner wallet inexistente. (User {user_id})")
             return
             
-        logger.info(f"⚡ [EXECUÇÃO] Preparando roteamento e compra de {target_token} na Base...")
+        logger.info(f"⚡ [EXECUÇÃO] Preparando roteamento e compra de {target_token} na Base... (User {user_id})")
         
         try:
             # 1. Configuração da Operação
@@ -892,8 +934,16 @@ class BaseMemeSniper:
             target_token_checksum = self.w3_http.to_checksum_address(target_token)
             path = [WETH_BASE, target_token_checksum]
             
-            amount_in_eth = float(self.config.get('snipe_size_eth', 0.0005))
+            amount_in_eth = float(state['config'].get('snipe_size_eth', 0.0005))
             amount_in_wei = self.w3_http.to_wei(amount_in_eth, 'ether')
+            
+            # Verificação de Saldo (Gás e Valor da Operação)
+            account = self.w3_http.eth.account.from_key(state['private_key'])
+            balance_wei = await self.w3_http.eth.get_balance(account.address)
+            # Exige saldo > Snipe Size + Buffer para gás (~0.0005 ETH)
+            if balance_wei < amount_in_wei + self.w3_http.to_wei(0.0005, 'ether'):
+                logger.warning(f"⚪ [FILTRO - SALDO INSUFICIENTE] Carteira {account.address} possui apenas {self.w3_http.from_wei(balance_wei, 'ether')} ETH (Gás estimado + {amount_in_eth} Snipe). Snipe ignorado para {target_token}. (User {user_id})")
+                return
             
             # 1.5 Validação Rápida de Liquidez (WETH) no Par
             if pair_address:
@@ -911,9 +961,9 @@ class BaseMemeSniper:
                     else:
                         weth_reserve = reserves[1]
                         
-                    min_pool_weth_eth = float(self.config.get('min_pool_weth', 0.05))
+                    min_pool_weth_eth = float(state['config'].get('min_pool_weth', 0.005))
                     if weth_reserve < self.w3_http.to_wei(min_pool_weth_eth, 'ether'):
-                        logger.info(f"⚪ [FILTRO] Liquidez insuficiente no pool (< {min_pool_weth_eth} WETH). Snipe ignorado.")
+                        logger.warning(f"⚪ [FILTRO - LIQUIDEZ] Liquidez insuficiente no pool para {target_token} (Requer {min_pool_weth_eth}, Encontrou {self.w3_http.from_wei(weth_reserve, 'ether')} WETH). Snipe ignorado. (User {user_id})")
                         return
                         
                     # 1.6 Validação de Queima/Trava de LP (LP Burn/Lock Check)
@@ -937,7 +987,7 @@ class BaseMemeSniper:
                             break
                             
                     if not is_lp_safe:
-                        logger.warning("⚠️ [RISCO LP] Liquidez não travada/queimada. Snipe cancelado.")
+                        logger.warning(f"⚠️ [FILTRO - LP NÃO TRAVADO] Liquidez do par {pair_address} para token {target_token} não travada/queimada. Snipe cancelado. (User {user_id})")
                         return
                         
                 except Exception as e:
@@ -946,7 +996,7 @@ class BaseMemeSniper:
             # 2. Estimativa de retorno via getAmountsOut
             expected_out = await self.get_amounts_out(amount_in_wei, path)
             if expected_out == 0:
-                logger.error("❌ Abortando: Simulação retornou 0 tokens (Sem liquidez ou token scam/tax).")
+                logger.warning(f"❌ [FILTRO - TAX/SCAM] Abortando {target_token}: Simulação retornou 0 tokens (Sem liquidez ou token scam/tax de 100%). (User {user_id})")
                 return
 
             slippage_tolerance = 0.80  # Slippage de 20% para snipes agressivos
@@ -960,14 +1010,14 @@ class BaseMemeSniper:
                     return
 
             # 3. ⛔ ANTI-HONEYPOT: Simula venda via eth.call antes de qualquer TX real
-            is_safe = await self.anti_honeypot_check(target_token, amount_in_wei, expected_out)
+            is_safe = await self.anti_honeypot_check(target_token, amount_in_wei, expected_out, user_id=user_id)
             if not is_safe:
                 return  # Abortado pelo Anti-Honeypot
 
             # 4. Preparação do Contrato e Conta
             logger.info("🟢 [SIMULAÇÃO APROVADA] Disparando ordem de compra real...")
             router = self.w3_http.eth.contract(address=self.w3_http.to_checksum_address(ROUTER_ADDRESS), abi=ROUTER_ABI)
-            account = self.w3_http.eth.account.from_key(self.private_key)
+            account = self.w3_http.eth.account.from_key(state['private_key'])
             nonce = await self.w3_http.eth.get_transaction_count(account.address)
             
             # 5. Cálculo de Gás Legacy
@@ -1015,7 +1065,7 @@ class BaseMemeSniper:
             
             try:
                 # 7. Assinatura Offline na RAM
-                signed_tx = self.w3_http.eth.account.sign_transaction(tx, private_key=self.private_key)
+                signed_tx = self.w3_http.eth.account.sign_transaction(tx, private_key=state['private_key'])
                 
                 # 8. Disparo
                 try:
@@ -1029,16 +1079,16 @@ class BaseMemeSniper:
                 tx_hash = await self.w3_http.eth.send_raw_transaction(raw_tx)
                 
                 latency = (time.time() - start_time) * 1000
-                logger.info(f"✅ [SNIPE ENVIADO] TX Hash: {tx_hash.hex()} | Latência: {latency:.2f}ms")
+                logger.info(f"✅ [SNIPE ENVIADO] TX Hash: {tx_hash.hex()} | Latência: {latency:.2f}ms (User {user_id})")
                 
-                self.total_trades += 1
-                await self.broadcast_ws({"type": "metrics_updated", "metrics": {"total_trades": self.total_trades, "win_trades": self.win_trades, "daily_pnl_usd": self.daily_pnl_usd}})
+                state['total_trades'] += 1
+                await self.broadcast_ws({"type": "metrics_updated", "metrics": {"total_trades": state['total_trades'], "win_trades": state['win_trades'], "daily_pnl_usd": state['daily_pnl_usd']}}, target_user_id=user_id)
 
                 # 9. Auto-Approve do Router em background (não trava o loop)
-                asyncio.create_task(self.auto_approve_router(target_token))
+                asyncio.create_task(self.auto_approve_router(target_token, user_id=user_id))
                 
                 # 10. Inicia Monitoramento de Posição (TP/SL) em background
-                asyncio.create_task(self.monitor_position(target_token, amount_in_wei, expected_out))
+                asyncio.create_task(self.monitor_position(target_token, amount_in_wei, expected_out, user_id=user_id))
             except Exception as e:
                 logger.error(f"❌ [FALHA DE EXECUÇÃO EVM] Erro ao enviar a compra. TX Payload Limpo: {tx} | Erro: {e}")
                 
@@ -1077,17 +1127,20 @@ class BaseMemeSniper:
             self.connected_clients.add(websocket)
             logger.info(f"🔌 [WS] Cliente adicionado ao pool. Total: {len(self.connected_clients)}")
             
-            # Enviar status inicial da carteira e do robô
-            status_payload = {
-                "type": "wallet_status",
-                "wallet_address": self.wallet_address if self.wallet_address else None,
-                "is_active": self.is_active
-            }
-            await websocket.send(json.dumps(status_payload))
-            await websocket.send(json.dumps({
-                "type": "sniper_status",
-                "is_active": self.is_active
-            }))
+            # Enviar status inicial da carteira e do robô isolados por usuário
+            user_id = getattr(websocket, 'user_id', None)
+            if user_id:
+                state = self._get_user_state(user_id)
+                status_payload = {
+                    "type": "wallet_status",
+                    "wallet_address": state['wallet_address'],
+                    "is_active": state['is_active']
+                }
+                await websocket.send(json.dumps(status_payload))
+                await websocket.send(json.dumps({
+                    "type": "sniper_status",
+                    "is_active": state['is_active']
+                }))
             
             async for message in websocket:
                 try:
@@ -1099,59 +1152,68 @@ class BaseMemeSniper:
                         pk = data.get("private_key")
                         user_id = getattr(websocket, 'user_id', None)
                         
-                        if address and pk:
+                        if address and pk and user_id:
                             logger.info(f"🔐 [WS] Recebida nova Burner Wallet: {address} para User ID: {user_id}")
                             await asyncio.to_thread(self._sync_save_wallet, address, pk, user_id)
-                            await self.load_wallet()
+                            # Reload entire data to refresh memory state safely
+                            await self.load_all_data()
                             
-                            # Broadcast status atualizado para todos clientes
+                            # Broadcast status atualizado para aquele usuário especificamente
+                            state = self._get_user_state(user_id)
                             update_payload = {
                                 "type": "wallet_status",
-                                "wallet_address": self.wallet_address,
-                                "is_active": self.is_active
+                                "wallet_address": state['wallet_address'],
+                                "is_active": state['is_active']
                             }
-                            await self.broadcast_ws(update_payload)
+                            await self.broadcast_ws(update_payload, target_user_id=user_id)
 
                     elif msg_type == "toggle_sniper":
                         new_state = data.get("is_active")
-                        if new_state is None:
-                            self.is_active = not self.is_active
-                        else:
-                            self.is_active = bool(new_state)
-                        
-                        if self.is_active:
-                            logger.info("🟢 [STATUS] Base Meme Sniper ATIVADO pelo operador via painel!")
-                        else:
-                            logger.warning("⏸️ [STATUS] Base Meme Sniper PAUSADO pelo operador via painel! Novas ordens automáticas bloqueadas.")
-                        
-                        await self.broadcast_ws({
-                            "type": "sniper_status",
-                            "is_active": self.is_active
-                        })
+                        user_id = getattr(websocket, 'user_id', None)
+                        if user_id:
+                            state = self._get_user_state(user_id)
+                            if new_state is None:
+                                state['is_active'] = not state['is_active']
+                            else:
+                                state['is_active'] = bool(new_state)
+                            
+                            if state['is_active']:
+                                logger.info(f"🟢 [STATUS] Base Meme Sniper ATIVADO pelo operador via painel! (User {user_id})")
+                            else:
+                                logger.warning(f"⏸️ [STATUS] Base Meme Sniper PAUSADO pelo operador via painel! (User {user_id})")
+                            
+                            await self.broadcast_ws({
+                                "type": "sniper_status",
+                                "is_active": state['is_active']
+                            }, target_user_id=user_id)
 
                     elif msg_type == "manual_snipe":
                         token = data.get("token")
-                        if token:
-                            logger.info(f"🎯 [MANUAL] Disparo manual de Snipe solicitado para: {token}")
-                            asyncio.create_task(self.execute_swap(token, force=True))
+                        user_id = getattr(websocket, 'user_id', None)
+                        if token and user_id:
+                            logger.info(f"🎯 [MANUAL] Disparo manual de Snipe solicitado para: {token} (User {user_id})")
+                            asyncio.create_task(self.execute_swap(token, user_id=user_id, force=True))
                             
                     elif msg_type == "update_config":
                         new_config = data.get("config", {})
                         user_id = getattr(websocket, 'user_id', None)
-                        if new_config:
-                            self.config.update(new_config)
-                            logger.info(f"⚙️ [CONFIG] Parâmetros de risco atualizados via WS: {self.config}")
-                            if user_id:
-                                await asyncio.to_thread(self._sync_save_config, self.config, user_id)
-                            await self.broadcast_ws({"type": "config_updated", "config": self.config})
+                        if new_config and user_id:
+                            state = self._get_user_state(user_id)
+                            state['config'].update(new_config)
+                            logger.info(f"⚙️ [CONFIG] Parâmetros de risco atualizados via WS: {state['config']} (User {user_id})")
+                            await asyncio.to_thread(self._sync_save_config, state['config'], user_id)
+                            await self.broadcast_ws({"type": "config_updated", "config": state['config']}, target_user_id=user_id)
                             
                     elif msg_type == "force_sell":
                         token = data.get("token")
-                        if token and token in self.open_positions:
-                            logger.warning(f"🚨 [PANIC SELL] Venda de emergência solicitada pelo operador para {token}!")
-                            asyncio.create_task(self.execute_sell(token, sell_percentage=100))
-                            del self.open_positions[token]
-                            await self.broadcast_ws({"type": "open_positions", "positions": list(self.open_positions.values())})
+                        user_id = getattr(websocket, 'user_id', None)
+                        if token and user_id:
+                            state = self._get_user_state(user_id)
+                            if token in state['open_positions']:
+                                logger.warning(f"🚨 [PANIC SELL] Venda de emergência solicitada pelo operador para {token}! (User {user_id})")
+                                asyncio.create_task(self.execute_sell(token, user_id=user_id, sell_percentage=100))
+                                del state['open_positions'][token]
+                                await self.broadcast_ws({"type": "open_positions", "positions": list(state['open_positions'].values())}, target_user_id=user_id)
                 except Exception as e:
                     logger.error(f"❌ [WS] Erro ao processar mensagem: {e}")
                     
@@ -1162,11 +1224,14 @@ class BaseMemeSniper:
                 self.connected_clients.remove(websocket)
             logger.info(f"🔌 [WS] Cliente desconectado.")
 
-    async def broadcast_ws(self, payload):
+    async def broadcast_ws(self, payload, target_user_id=None):
         if not self.connected_clients:
             return
         msg = json.dumps(payload)
         for client in set(self.connected_clients):
+            uid = getattr(client, 'user_id', None)
+            if target_user_id and uid != target_user_id:
+                continue
             try:
                 await client.send(msg)
             except websockets.exceptions.ConnectionClosed:
@@ -1196,7 +1261,7 @@ class BaseMemeSniper:
             return
         
         # Carregamento do estado persistido sem travar o Event Loop
-        await self.load_wallet()
+        await self.load_all_data()
         
         # Tasks concorrentes plenas (RPC disponível)
         tasks = [

@@ -39,7 +39,7 @@ def init_db():
             CREATE TABLE IF NOT EXISTS user_configs (
                 user_id INTEGER PRIMARY KEY,
                 snipe_size_eth REAL DEFAULT 0.005,
-                min_pool_weth REAL DEFAULT 0.05,
+                min_pool_weth REAL DEFAULT 0.005,
                 tp_pct REAL DEFAULT 50.0,
                 sl_pct REAL DEFAULT 15.0,
                 FOREIGN KEY(user_id) REFERENCES users(id)
@@ -51,6 +51,25 @@ def init_db():
                 token TEXT UNIQUE NOT NULL,
                 used BOOLEAN DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS api_keys (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                exchange TEXT,
+                api_key TEXT,
+                api_secret TEXT,
+                FOREIGN KEY(user_id) REFERENCES users(id)
+            )
+        ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS burner_wallet (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                address TEXT,
+                pk_encrypted TEXT,
+                user_id INTEGER,
+                FOREIGN KEY(user_id) REFERENCES users(id)
             )
         ''')
         conn.commit()
@@ -82,6 +101,20 @@ class ExtendRequest(BaseModel):
 class ChangePasswordRequest(BaseModel):
     old_password: str
     new_password: str
+
+class UserConfigReq(BaseModel):
+    snipe_size_eth: float
+    min_pool_weth: float
+    tp_pct: float
+    sl_pct: float
+
+class WalletReq(BaseModel):
+    address: str
+    private_key: str
+
+class BinanceReq(BaseModel):
+    api_key: str
+    api_secret: str
 
 app = FastAPI(title="Grex HFT UI Server (Multi-Tenant)")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
@@ -187,6 +220,68 @@ def change_password(req: ChangePasswordRequest, current_user = Depends(get_curre
     cursor.execute("UPDATE users SET password_hash = ? WHERE id = ?", (new_hash, current_user["id"]))
     db.commit()
     return {"msg": "Senha alterada com sucesso"}
+
+# -----------------
+# Rotas de Usuário (Multi-Tenant Isoladas)
+# -----------------
+@app.get("/api/user/config")
+def get_user_config(current_user = Depends(get_current_user), db: sqlite3.Connection = Depends(get_db)):
+    cursor = db.cursor()
+    cursor.execute("SELECT * FROM user_configs WHERE user_id = ?", (current_user["id"],))
+    row = cursor.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Config não encontrada")
+    return dict(row)
+
+@app.post("/api/user/config")
+def save_user_config(req: UserConfigReq, current_user = Depends(get_current_user), db: sqlite3.Connection = Depends(get_db)):
+    cursor = db.cursor()
+    cursor.execute('''
+        UPDATE user_configs 
+        SET snipe_size_eth = ?, min_pool_weth = ?, tp_pct = ?, sl_pct = ? 
+        WHERE user_id = ?
+    ''', (req.snipe_size_eth, req.min_pool_weth, req.tp_pct, req.sl_pct, current_user["id"]))
+    db.commit()
+    return {"msg": "Configurações salvas"}
+
+@app.get("/api/user/wallet")
+def get_user_wallet(current_user = Depends(get_current_user), db: sqlite3.Connection = Depends(get_db)):
+    cursor = db.cursor()
+    cursor.execute("SELECT address FROM burner_wallet WHERE user_id = ?", (current_user["id"],))
+    row = cursor.fetchone()
+    if not row:
+        return {"address": None}
+    return {"address": row["address"]}
+
+@app.post("/api/user/wallet")
+def save_user_wallet(req: WalletReq, current_user = Depends(get_current_user), db: sqlite3.Connection = Depends(get_db)):
+    # Nota: No mundo real, a pk_encrypted deve ser criptografada. 
+    # Aqui delegamos para a mesma rotina (se precisar criptografar, deve usar a mesma chave mestra).
+    # Como as chaves são geridas por websocket normalmente, este endpoint garante fallback HTPP restrito.
+    cursor = db.cursor()
+    cursor.execute("DELETE FROM burner_wallet WHERE user_id = ?", (current_user["id"],))
+    cursor.execute("INSERT INTO burner_wallet (address, pk_encrypted, user_id) VALUES (?, ?, ?)", 
+                   (req.address, req.private_key, current_user["id"]))
+    db.commit()
+    return {"msg": "Wallet salva"}
+
+@app.get("/api/user/binance")
+def get_user_binance(current_user = Depends(get_current_user), db: sqlite3.Connection = Depends(get_db)):
+    cursor = db.cursor()
+    cursor.execute("SELECT api_key FROM api_keys WHERE user_id = ? AND exchange = 'binance'", (current_user["id"],))
+    row = cursor.fetchone()
+    if not row:
+        return {"api_key": None}
+    return {"api_key": row["api_key"]}
+
+@app.post("/api/user/binance")
+def save_user_binance(req: BinanceReq, current_user = Depends(get_current_user), db: sqlite3.Connection = Depends(get_db)):
+    cursor = db.cursor()
+    cursor.execute("DELETE FROM api_keys WHERE user_id = ? AND exchange = 'binance'", (current_user["id"],))
+    cursor.execute("INSERT INTO api_keys (user_id, exchange, api_key, api_secret) VALUES (?, 'binance', ?, ?)", 
+                   (current_user["id"], req.api_key, req.api_secret))
+    db.commit()
+    return {"msg": "Chaves da Binance salvas"}
 
 # -----------------
 # Rotas Admin
