@@ -381,12 +381,6 @@ class BaseMemeSniper:
                     INSERT INTO burner_wallet (address, pk_encrypted, user_id)
                     VALUES (?, ?, ?)
                 ''', (address, enc_pk, user_id))
-            else:
-                cursor.execute("DELETE FROM burner_wallet")
-                cursor.execute('''
-                    INSERT INTO burner_wallet (address, pk_encrypted)
-                    VALUES (?, ?)
-                ''', (address, enc_pk))
             conn.commit()
 
     def _sync_save_config(self, config_dict, user_id):

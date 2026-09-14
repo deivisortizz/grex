@@ -82,6 +82,7 @@ class MarketDataEngine:
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS history (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER,
                     timestamp TEXT,
                     exchange_buy TEXT,
                     exchange_sell TEXT,
@@ -91,52 +92,69 @@ class MarketDataEngine:
             ''')
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS api_keys (
-                    exchange TEXT PRIMARY KEY,
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER,
+                    exchange TEXT,
                     key_encrypted TEXT,
                     secret_encrypted TEXT,
                     password_encrypted TEXT
                 )
             ''')
+            # Migração para adicionar user_id
+            cursor.execute("PRAGMA table_info(history)")
+            cols = [col[1] for col in cursor.fetchall()]
+            if 'user_id' not in cols:
+                cursor.execute("ALTER TABLE history ADD COLUMN user_id INTEGER")
+            cursor.execute("PRAGMA table_info(api_keys)")
+            cols = [col[1] for col in cursor.fetchall()]
+            if 'user_id' not in cols:
+                cursor.execute("ALTER TABLE api_keys ADD COLUMN user_id INTEGER")
             conn.commit()
 
-    def _sync_get_trade_history(self):
+    def _sync_get_trade_history(self, user_id=None):
         db_path = os.path.join(DATA_DIR, 'trades.db')
         with sqlite3.connect(db_path) as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM history ORDER BY id DESC LIMIT 100")
+            if user_id:
+                cursor.execute("SELECT * FROM history WHERE user_id = ? ORDER BY id DESC LIMIT 100", (user_id,))
+            else:
+                cursor.execute("SELECT * FROM history ORDER BY id DESC LIMIT 100")
             rows = cursor.fetchall()
             return [dict(row) for row in rows]
 
-    async def get_trade_history(self):
+    async def get_trade_history(self, user_id=None):
         try:
-            return await asyncio.to_thread(self._sync_get_trade_history)
+            return await asyncio.to_thread(self._sync_get_trade_history, user_id)
         except Exception as e:
             logger.error(f"Erro ao ler histórico SQLite: {e}")
             return []
 
-    def _sync_insert_trade(self, timestamp, ex_buy, ex_sell, gross, net):
+    def _sync_insert_trade(self, timestamp, ex_buy, ex_sell, gross, net, user_id=None):
         db_path = os.path.join(DATA_DIR, 'trades.db')
         with sqlite3.connect(db_path) as conn:
             cursor = conn.cursor()
             cursor.execute('''
-                INSERT INTO history (timestamp, exchange_buy, exchange_sell, spread_bruto, lucro_liquido)
-                VALUES (?, ?, ?, ?, ?)
-            ''', (timestamp, ex_buy, ex_sell, gross, net))
+                INSERT INTO history (timestamp, exchange_buy, exchange_sell, spread_bruto, lucro_liquido, user_id)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (timestamp, ex_buy, ex_sell, gross, net, user_id))
             conn.commit()
             return cursor.lastrowid
 
-    def _sync_save_api_key(self, exchange, apikey, secret, password):
+    def _sync_save_api_key(self, exchange, apikey, secret, password, user_id=None):
+        if not user_id:
+            return
         enc_key = self.encrypt_val(apikey)
         enc_sec = self.encrypt_val(secret)
         enc_pass = self.encrypt_val(password)
         db_path = os.path.join(DATA_DIR, 'trades.db')
         with sqlite3.connect(db_path) as conn:
             cursor = conn.cursor()
+            cursor.execute("DELETE FROM api_keys WHERE exchange = ? AND user_id = ?", (exchange, user_id))
             cursor.execute('''
-                INSERT OR REPLACE INTO api_keys (exchange, key_encrypted, secret_encrypted, password_encrypted)
-                VALUES (?, ?, ?, ?)
-            ''', (exchange, enc_key, enc_sec, enc_pass))
+                INSERT INTO api_keys (exchange, key_encrypted, secret_encrypted, password_encrypted, user_id)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (exchange, enc_key, enc_sec, enc_pass, user_id))
             conn.commit()
 
     def _sync_get_all_keys(self):
@@ -188,12 +206,37 @@ class MarketDataEngine:
         return tasks
 
     async def ws_handler(self, websocket):
+        import jwt
+        
+        JWT_SECRET = os.getenv("JWT_SECRET", "multi-tenant-super-secret-fallback")
+        JWT_ALGORITHM = "HS256"
+        
+        logger.info(f"🔌 [WS] Nova conexão solicitada. Aguardando autenticação JWT...")
+        try:
+            auth_message = await asyncio.wait_for(websocket.recv(), timeout=10.0)
+            auth_data = json.loads(auth_message)
+            if auth_data.get("type") == "auth" and auth_data.get("token"):
+                token = auth_data.get("token")
+                try:
+                    payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+                    websocket.user_id = payload.get("sub")
+                    logger.info(f"✅ [WS] Cliente autenticado (User ID: {websocket.user_id})")
+                except Exception as e:
+                    logger.warning(f"❌ [WS] Erro JWT: {e}. Desconectando.")
+                    return
+            else:
+                logger.warning("⚠️ [WS] Primeira mensagem não foi de autenticação. Desconectando.")
+                return
+        except asyncio.TimeoutError:
+            logger.info("ℹ️ [WS] Tempo esgotado para autenticação.")
+            return
+
         self.connected_clients.add(websocket)
         logger.info(f"Frontend conectado. Total de clientes: {len(self.connected_clients)}")
         
         # Handshake protegido
         try:
-            history = await self.get_trade_history()
+            history = await self.get_trade_history(user_id=getattr(websocket, 'user_id', None))
             await websocket.send(json.dumps({"type": "history", "data": history}))
             await websocket.send(json.dumps({
                 "type": "config", 
@@ -201,7 +244,7 @@ class MarketDataEngine:
                 "trade_amount": self.TRADE_AMOUNT_USDT,
                 "is_spatial_active": self.is_spatial_active,
                 "is_triangular_active": self.is_triangular_active,
-                "exchanges": list(self.orderbook_state.keys())
+                "exchanges": list(self.orderbook_state.keys()) # Ideally this should be per user too
             }))
         except websockets.exceptions.ConnectionClosed:
             logger.warning("Cliente desconectou antes do handshake. Ignorando.")
@@ -242,7 +285,7 @@ class MarketDataEngine:
                         elif cmd == "pause_triangular":
                             self.is_triangular_active = False
                         elif cmd == "get_history":
-                            hist = await self.get_trade_history()
+                            hist = await self.get_trade_history(user_id=getattr(websocket, 'user_id', None))
                             await websocket.send(json.dumps({"type": "history", "data": hist}))
                             continue
                         elif cmd == "add_exchange":
@@ -253,8 +296,9 @@ class MarketDataEngine:
                                     apikey = creds.get("apiKey", "")
                                     secret = creds.get("secret", "")
                                     password = creds.get("password", "")
+                                    user_id = getattr(websocket, 'user_id', None)
                                     
-                                    await asyncio.to_thread(self._sync_save_api_key, ex_name, apikey, secret, password)
+                                    await asyncio.to_thread(self._sync_save_api_key, ex_name, apikey, secret, password, user_id)
                                     
                                     creds['enableRateLimit'] = True
                                     ExchangeClass = getattr(ccxt, ex_name.lower())

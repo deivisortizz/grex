@@ -265,14 +265,25 @@ def save_user_wallet(req: WalletReq, current_user = Depends(get_current_user), d
     db.commit()
     return {"msg": "Wallet salva"}
 
+@app.delete("/api/user/wallet")
+def delete_user_wallet(current_user = Depends(get_current_user), db: sqlite3.Connection = Depends(get_db)):
+    cursor = db.cursor()
+    cursor.execute("DELETE FROM burner_wallet WHERE user_id = ?", (current_user["id"],))
+    db.commit()
+    return {"msg": "Wallet removida com sucesso"}
+
 @app.get("/api/user/binance")
 def get_user_binance(current_user = Depends(get_current_user), db: sqlite3.Connection = Depends(get_db)):
     cursor = db.cursor()
     cursor.execute("SELECT api_key FROM api_keys WHERE user_id = ? AND exchange = 'binance'", (current_user["id"],))
     row = cursor.fetchone()
-    if not row:
+    if not row or not row["api_key"]:
         return {"api_key": None}
-    return {"api_key": row["api_key"]}
+    
+    api_key = row["api_key"]
+    # Mascara a chave por segurança
+    masked = f"{api_key[:4]}***{api_key[-4:]}" if len(api_key) >= 8 else "***"
+    return {"api_key": masked}
 
 @app.post("/api/user/binance")
 def save_user_binance(req: BinanceReq, current_user = Depends(get_current_user), db: sqlite3.Connection = Depends(get_db)):
@@ -282,6 +293,30 @@ def save_user_binance(req: BinanceReq, current_user = Depends(get_current_user),
                    (current_user["id"], req.api_key, req.api_secret))
     db.commit()
     return {"msg": "Chaves da Binance salvas"}
+
+@app.delete("/api/user/binance")
+def delete_user_binance(current_user = Depends(get_current_user), db: sqlite3.Connection = Depends(get_db)):
+    cursor = db.cursor()
+    cursor.execute("DELETE FROM api_keys WHERE user_id = ? AND exchange = 'binance'", (current_user["id"],))
+    db.commit()
+    return {"msg": "Chaves da Binance removidas com sucesso"}
+
+@app.get("/api/analytics")
+def get_analytics(current_user = Depends(get_current_user)):
+    db_path = os.path.join(DATA_DIR, 'trades.db')
+    if not os.path.exists(db_path):
+        return {"history": []}
+    
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        try:
+            cursor.execute("SELECT * FROM history WHERE user_id = ? ORDER BY id DESC LIMIT 100", (current_user["id"],))
+            rows = cursor.fetchall()
+            return {"history": [dict(row) for row in rows]}
+        except sqlite3.OperationalError:
+            # Caso a tabela ainda não tenha sido migrada/criada pelo arbitrage_bot
+            return {"history": []}
 
 # -----------------
 # Rotas Admin
