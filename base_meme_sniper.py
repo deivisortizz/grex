@@ -139,6 +139,41 @@ ERC20_ABI = [
         "type": "function"
     },
     {
+        "inputs": [],
+        "name": "name",
+        "outputs": [{"internalType": "string", "name": "", "type": "string"}],
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "inputs": [],
+        "name": "symbol",
+        "outputs": [{"internalType": "string", "name": "", "type": "string"}],
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "inputs": [],
+        "name": "tax",
+        "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "inputs": [],
+        "name": "sellTax",
+        "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "inputs": [],
+        "name": "buyTax",
+        "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
         "inputs": [{"internalType": "address", "name": "account", "type": "address"}],
         "name": "balanceOf",
         "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
@@ -721,6 +756,49 @@ class BaseMemeSniper:
             await asyncio.sleep(2)
 
 
+    async def run_structural_filters(self, token_address: str) -> bool:
+        """
+        Executa os novos filtros estruturais: Scam/Impersonation e Inspeção Estática de Taxas.
+        Retorna True se passar, False se for bloqueado.
+        """
+        try:
+            checksum_addr = self.w3_http.to_checksum_address(token_address)
+            contract = self.w3_http.eth.contract(address=checksum_addr, abi=ERC20_ABI)
+            
+            # 1. Filtro de Símbolo e Nome (Impersonation)
+            try:
+                symbol = await contract.functions.symbol().call()
+                name = await contract.functions.name().call()
+                symbol_upper = symbol.upper()
+                name_upper = name.upper()
+                
+                # Lista negra de falsificações comuns
+                blacklist_keywords = ['WETH', 'USDC', 'USDT', 'BASE', 'AERO', 'TETHER']
+                for kw in blacklist_keywords:
+                    if kw in symbol_upper or kw in name_upper:
+                        logger.warning(f"⚪ [FILTRO] Token imita nome consolidado ({name} / {symbol}). Snipe ignorado.")
+                        return False
+            except Exception:
+                pass # Alguns tokens podem não ter name/symbol ou travar
+                
+            # 2. Inspeção Estática de Taxas (> 10%)
+            tax_methods = ['tax', 'sellTax', 'buyTax']
+            for method in tax_methods:
+                if hasattr(contract.functions, method):
+                    try:
+                        tax_val = await getattr(contract.functions, method)().call()
+                        # Se retornar algo como 10 ou > 10% (considerando divisores típicos)
+                        if tax_val > 10 and tax_val < 100: 
+                            logger.warning(f"⚪ [FILTRO] Taxa abusiva declarada ({tax_val}% no método {method}). Snipe ignorado.")
+                            return False
+                    except Exception:
+                        continue # Função não existe ou não pôde ser lida
+                        
+            return True
+        except Exception as e:
+            logger.debug(f"Aviso: Erro ao executar filtros estruturais: {e}")
+            return True
+
     async def execute_swap(self, target_token, force=False, pair_address=None):
         """
         Gera e assina a transação de compra (Snipe) com:
@@ -804,6 +882,12 @@ class BaseMemeSniper:
             slippage_tolerance = 0.80  # Slippage de 20% para snipes agressivos
             amount_out_min = int(expected_out * slippage_tolerance)
             logger.info(f"📊 Estimativa: {expected_out} | Mínimo aceitável: {amount_out_min}")
+
+            # 2.5 Filtros Estruturais Preventivos (Economia de RPC)
+            if not force:
+                passed_filters = await self.run_structural_filters(target_token_checksum)
+                if not passed_filters:
+                    return
 
             # 3. ⛔ ANTI-HONEYPOT: Simula venda via eth.call antes de qualquer TX real
             is_safe = await self.anti_honeypot_check(target_token, amount_in_wei, expected_out)
