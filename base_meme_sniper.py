@@ -1133,7 +1133,8 @@ class BaseMemeSniper:
         except websockets.exceptions.ConnectionClosed:
             pass
         finally:
-            self.connected_clients.remove(websocket)
+            if websocket in self.connected_clients:
+                self.connected_clients.remove(websocket)
             logger.info(f"🔌 [WS] Cliente desconectado.")
 
     async def broadcast_ws(self, payload):
