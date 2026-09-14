@@ -20,6 +20,10 @@ export default function BurnerWalletConfig() {
 
     ws.onopen = () => {
       setIsConnected(true)
+      const token = localStorage.getItem('token')
+      if (token) {
+        ws.send(JSON.stringify({ type: 'auth', token }))
+      }
     }
 
     ws.onmessage = (event) => {

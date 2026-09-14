@@ -347,16 +347,40 @@ class BaseMemeSniper:
                 return dict(row)
             return None
 
-    def _sync_save_wallet(self, address, private_key):
+    def _sync_save_wallet(self, address, private_key, user_id=None):
         enc_pk = self.encrypt_val(private_key)
         db_path = os.path.join(DATA_DIR, 'sniper.db')
-        with sqlite3.connect(db_path) as conn:
+        with sqlite3.connect(db_path, check_same_thread=False) as conn:
             cursor = conn.cursor()
-            cursor.execute("DELETE FROM burner_wallet") # Mantém apenas 1 burner
+            if user_id:
+                cursor.execute("DELETE FROM burner_wallet WHERE user_id = ?", (user_id,))
+                cursor.execute('''
+                    INSERT INTO burner_wallet (address, pk_encrypted, user_id)
+                    VALUES (?, ?, ?)
+                ''', (address, enc_pk, user_id))
+            else:
+                cursor.execute("DELETE FROM burner_wallet")
+                cursor.execute('''
+                    INSERT INTO burner_wallet (address, pk_encrypted)
+                    VALUES (?, ?)
+                ''', (address, enc_pk))
+            conn.commit()
+
+    def _sync_save_config(self, config_dict, user_id):
+        db_path = os.path.join(DATA_DIR, 'sniper.db')
+        with sqlite3.connect(db_path, check_same_thread=False) as conn:
+            cursor = conn.cursor()
             cursor.execute('''
-                INSERT INTO burner_wallet (address, pk_encrypted)
-                VALUES (?, ?)
-            ''', (address, enc_pk))
+                UPDATE user_configs 
+                SET snipe_size_eth = ?, min_pool_weth = ?, tp_pct = ?, sl_pct = ?
+                WHERE user_id = ?
+            ''', (
+                config_dict.get('snipe_size_eth', 0.005),
+                config_dict.get('min_pool_weth', 0.05),
+                config_dict.get('tp_pct', 50.0),
+                config_dict.get('sl_pct', 15.0),
+                user_id
+            ))
             conn.commit()
 
     async def load_wallet(self):
@@ -1030,28 +1054,25 @@ class BaseMemeSniper:
         logger.info(f"🔌 [WS] Nova conexão solicitada. Aguardando autenticação JWT...")
         
         try:
-            # Aguarda a primeira mensagem que deve ser a autenticação
-            auth_message = await asyncio.wait_for(websocket.recv(), timeout=10.0)
-            auth_data = json.loads(auth_message)
-            
-            if auth_data.get("type") != "auth" or not auth_data.get("token"):
-                logger.warning("❌ [WS] Conexão recusada: Token ausente ou formato inválido.")
-                await websocket.close(code=1008, reason="Authentication required")
-                return
-                
-            token = auth_data.get("token")
             try:
-                payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-                user_id = payload.get("sub")
-                logger.info(f"✅ [WS] Cliente autenticado (User ID: {user_id})")
-            except jwt.ExpiredSignatureError:
-                logger.warning("❌ [WS] Conexão recusada: Token expirado.")
-                await websocket.close(code=1008, reason="Token expired")
-                return
-            except jwt.InvalidTokenError:
-                logger.warning("❌ [WS] Conexão recusada: Token inválido.")
-                await websocket.close(code=1008, reason="Invalid token")
-                return
+                auth_message = await asyncio.wait_for(websocket.recv(), timeout=10.0)
+                auth_data = json.loads(auth_message)
+                
+                if auth_data.get("type") == "auth" and auth_data.get("token"):
+                    token = auth_data.get("token")
+                    try:
+                        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+                        websocket.user_id = payload.get("sub")
+                        logger.info(f"✅ [WS] Cliente autenticado (User ID: {websocket.user_id})")
+                    except Exception as e:
+                        logger.warning(f"❌ [WS] Erro JWT: {e}. Cliente mantido como visitante.")
+                        websocket.user_id = None
+                else:
+                    logger.warning("⚠️ [WS] Primeira mensagem não foi de autenticação. Modo visitante ativado.")
+                    websocket.user_id = None
+            except asyncio.TimeoutError:
+                logger.info("ℹ️ [WS] Tempo esgotado para autenticação. Cliente conectado em modo leitura (visitante).")
+                websocket.user_id = None
 
             self.connected_clients.add(websocket)
             logger.info(f"🔌 [WS] Cliente adicionado ao pool. Total: {len(self.connected_clients)}")
@@ -1076,10 +1097,11 @@ class BaseMemeSniper:
                     if msg_type == "add_wallet":
                         address = data.get("address")
                         pk = data.get("private_key")
+                        user_id = getattr(websocket, 'user_id', None)
                         
                         if address and pk:
-                            logger.info(f"🔐 [WS] Recebida nova Burner Wallet: {address}")
-                            await asyncio.to_thread(self._sync_save_wallet, address, pk)
+                            logger.info(f"🔐 [WS] Recebida nova Burner Wallet: {address} para User ID: {user_id}")
+                            await asyncio.to_thread(self._sync_save_wallet, address, pk, user_id)
                             await self.load_wallet()
                             
                             # Broadcast status atualizado para todos clientes
@@ -1115,9 +1137,12 @@ class BaseMemeSniper:
                             
                     elif msg_type == "update_config":
                         new_config = data.get("config", {})
+                        user_id = getattr(websocket, 'user_id', None)
                         if new_config:
                             self.config.update(new_config)
                             logger.info(f"⚙️ [CONFIG] Parâmetros de risco atualizados via WS: {self.config}")
+                            if user_id:
+                                await asyncio.to_thread(self._sync_save_config, self.config, user_id)
                             await self.broadcast_ws({"type": "config_updated", "config": self.config})
                             
                     elif msg_type == "force_sell":
