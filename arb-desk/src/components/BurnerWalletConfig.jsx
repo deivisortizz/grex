@@ -91,10 +91,30 @@ export default function BurnerWalletConfig() {
       {walletStatus ? (
         <div className="mb-6 p-4 rounded-xl bg-emerald-950/30 border border-emerald-500/20 flex items-center gap-3 shadow-[0_0_15px_rgba(16,185,129,0.1)]">
           <CheckCircle2 size={24} className="text-emerald-500" />
-          <div>
+          <div className="flex-1">
             <p className="text-sm font-bold text-emerald-400">Carteira Ativa e Criptografada</p>
             <p className="text-xs text-zinc-400 font-mono mt-0.5">{maskAddress(walletStatus)}</p>
           </div>
+          <button 
+            onClick={async () => {
+              const token = localStorage.getItem('token');
+              try {
+                await fetch('/api/user/wallet', {
+                  method: 'DELETE',
+                  headers: { 'Authorization': `Bearer ${token}` }
+                });
+                setWalletStatus(null);
+                setAddress('');
+                setPrivateKey('');
+              } catch (e) {
+                console.error(e);
+              }
+            }}
+            className="p-2 bg-rose-500/20 text-rose-500 rounded-lg hover:bg-rose-500/30 transition-colors"
+            title="Deletar Carteira"
+          >
+            Deletar
+          </button>
         </div>
       ) : (
         <div className="mb-6 p-4 rounded-xl bg-amber-950/30 border border-amber-500/20 flex items-center gap-3">

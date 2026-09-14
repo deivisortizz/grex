@@ -42,9 +42,18 @@ export default function ExchangesTab({ exchanges = [], sendCommand }) {
                   <p className="text-xs text-zinc-500">Conectado via WebSocket</p>
                 </div>
               </div>
-              <div className="flex items-center gap-2">
-                <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse shadow-[0_0_8px_rgba(16,185,129,0.8)]"></span>
-                <span className="text-xs font-bold text-emerald-500 uppercase">Live</span>
+              <div className="flex items-center gap-4">
+                <div className="flex items-center gap-2">
+                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse shadow-[0_0_8px_rgba(16,185,129,0.8)]"></span>
+                  <span className="text-xs font-bold text-emerald-500 uppercase">Live</span>
+                </div>
+                <button
+                  onClick={() => sendCommand('delete_exchange', { exchange: ex })}
+                  className="p-1.5 bg-rose-500/10 text-rose-500 rounded hover:bg-rose-500/20 transition-colors"
+                  title="Deletar Corretora"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"></path><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"></path><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"></path></svg>
+                </button>
               </div>
             </div>
           ))}

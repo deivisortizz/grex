@@ -157,6 +157,14 @@ class MarketDataEngine:
             ''', (exchange, enc_key, enc_sec, enc_pass, user_id))
             conn.commit()
 
+    def _sync_delete_api_key(self, exchange, user_id):
+        if not user_id: return
+        db_path = os.path.join(DATA_DIR, 'trades.db')
+        with sqlite3.connect(db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM api_keys WHERE exchange = ? AND user_id = ?", (exchange, user_id))
+            conn.commit()
+
     def _sync_get_all_keys(self):
         db_path = os.path.join(DATA_DIR, 'trades.db')
         with sqlite3.connect(db_path) as conn:
@@ -323,6 +331,27 @@ class MarketDataEngine:
                                 "is_triangular_active": self.is_triangular_active,
                                 "exchanges": list(self.orderbook_state.keys())
                             })
+                            continue
+                        elif cmd == "delete_exchange":
+                            ex_name = data.get("exchange", "").upper()
+                            user_id = getattr(websocket, 'user_id', None)
+                            if ex_name and user_id:
+                                await asyncio.to_thread(self._sync_delete_api_key, ex_name, user_id)
+                                if ex_name in self.orderbook_state:
+                                    # Close instance and remove from memory
+                                    inst = self.orderbook_state[ex_name].get('instance')
+                                    if inst:
+                                        asyncio.create_task(inst.close())
+                                    del self.orderbook_state[ex_name]
+                                
+                                await self.broadcast_raw({
+                                    "type": "config", 
+                                    "target_spread": self.TARGET_SPREAD, 
+                                    "trade_amount": self.TRADE_AMOUNT_USDT,
+                                    "is_spatial_active": self.is_spatial_active,
+                                    "is_triangular_active": self.is_triangular_active,
+                                    "exchanges": list(self.orderbook_state.keys())
+                                })
                             continue
 
                         await self.broadcast_raw({
