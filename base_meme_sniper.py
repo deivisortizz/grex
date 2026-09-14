@@ -230,6 +230,14 @@ class BaseMemeSniper:
         
         self.connected_clients = set()
 
+        # Conecta os logs do backend ao WebSocket do frontend
+        ws_logger = WSLogHandler(self)
+        ws_logger.setFormatter(logging.Formatter('%(asctime)s - %(message)s', datefmt='%H:%M:%S'))
+        logger.addHandler(ws_logger)
+        
+        self.init_crypto()
+        self.init_db()
+
     def _get_user_state(self, user_id):
         if user_id not in self.user_states:
             self.user_states[user_id] = {
@@ -248,15 +256,6 @@ class BaseMemeSniper:
                 'daily_pnl_usd': 0.0
             }
         return self.user_states[user_id]
-        
-        # Conecta os logs do backend ao WebSocket do frontend
-        ws_logger = WSLogHandler(self)
-        ws_logger.setFormatter(logging.Formatter('%(asctime)s - %(message)s', datefmt='%H:%M:%S'))
-        logger.addHandler(ws_logger)
-        
-        self.init_crypto()
-        self.init_db()
-
     # ---------------------------------------------------------
     # Cofre (Fernet Vault) e DB Assíncrono
     # ---------------------------------------------------------
