@@ -7,18 +7,20 @@ import HistoryTab from './components/HistoryTab'
 import AnalyticsTab from './components/AnalyticsTab'
 import AutobotTab from './components/AutobotTab'
 import ExchangesTab from './components/ExchangesTab'
-import TriangularTab from './components/TriangularTab'
 import BlueOceanDesk from './components/BlueOceanDesk'
 import Login from './components/Login'
+import Register from './components/Register'
 import SniperDashboard from './components/sniper/SniperDashboard'
+import AdminDashboard from './components/admin/AdminDashboard'
+import AccountSettings from './components/AccountSettings'
 
 function App() {
   // Controle do menu mobile
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
-  // Estado de autenticação persistido
-  const [isAuthenticated, setIsAuthenticated] = useState(
-    localStorage.getItem('arb_auth') === 'true'
-  )
+  // Estado de autenticação
+  const [token, setToken] = useState(localStorage.getItem('token'))
+  const [isAdmin, setIsAdmin] = useState(localStorage.getItem('is_admin') === 'true')
+  const [isAuthenticated, setIsAuthenticated] = useState(!!token)
 
   const [activeTab, setActiveTab] = useState('Cotações')
   const [marketData, setMarketData] = useState({})
@@ -44,6 +46,11 @@ function App() {
 
     ws.onopen = () => {
       setWsStatus('Online')
+      
+      // Envia o token JWT de autenticação na conexão inicial
+      const currentToken = localStorage.getItem('token')
+      ws.send(JSON.stringify({ type: 'auth', token: currentToken }))
+      
       pingInterval = setInterval(() => {
         if (ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({ type: 'ping', timestamp: Date.now() }))
@@ -109,12 +116,28 @@ function App() {
     }
   }
 
-  const handleLogin = () => {
-    localStorage.setItem('arb_auth', 'true')
+  const handleLogin = (newToken, adminStatus = false) => {
+    setToken(newToken)
+    setIsAdmin(adminStatus)
     setIsAuthenticated(true)
   }
 
+  const handleLogout = () => {
+    localStorage.removeItem('token')
+    localStorage.removeItem('is_admin')
+    setToken(null)
+    setIsAdmin(false)
+    setIsAuthenticated(false)
+  }
+
+  const urlParams = new URLSearchParams(window.location.search);
+  const inviteCode = urlParams.get('invite');
+  const isInviteRoute = window.location.pathname === '/register' && inviteCode === 'grex-beta-2026';
+
   if (!isAuthenticated) {
+    if (isInviteRoute) {
+      return <Register inviteCode={inviteCode} onNavigateLogin={() => window.location.href = '/'} />
+    }
     return <Login onLogin={handleLogin} />
   }
 
@@ -130,6 +153,7 @@ function App() {
         }} 
         isOpen={isMobileMenuOpen}
         setIsOpen={setIsMobileMenuOpen}
+        isAdmin={isAdmin}
       />
 
       {/* Main Content Area */}
@@ -137,17 +161,31 @@ function App() {
         {/* Mobile Header with Hamburger */}
         <div className="md:hidden flex items-center justify-between mb-6 pb-4 border-b border-zinc-800">
           <h2 className="text-2xl font-bold tracking-tight text-white">{activeTab}</h2>
-          <button 
-            onClick={() => setIsMobileMenuOpen(true)}
-            className="p-2 bg-zinc-800 rounded-lg text-zinc-300 hover:text-white"
-          >
-            <Menu size={24} />
-          </button>
+          <div className="flex items-center gap-2">
+            <button 
+              onClick={handleLogout}
+              className="text-xs font-semibold text-zinc-400 hover:text-white bg-zinc-900 px-3 py-1.5 rounded-lg border border-zinc-800"
+            >
+              Sair
+            </button>
+            <button 
+              onClick={() => setIsMobileMenuOpen(true)}
+              className="p-2 bg-zinc-800 rounded-lg text-zinc-300 hover:text-white"
+            >
+              <Menu size={24} />
+            </button>
+          </div>
         </div>
         
         {/* Desktop Header */}
-        <header className="hidden md:block mb-8 border-b border-zinc-800 pb-6">
+        <header className="hidden md:flex items-center justify-between mb-8 border-b border-zinc-800 pb-6">
           <h2 className="text-3xl font-bold tracking-tight text-white">{activeTab}</h2>
+          <button 
+            onClick={handleLogout}
+            className="text-sm font-semibold text-zinc-400 hover:text-white bg-zinc-900 px-4 py-2 rounded-lg border border-zinc-800 transition-colors"
+          >
+            Encerrar Sessão
+          </button>
         </header>
 
         {activeTab === 'Cotações' && <DashboardTab marketData={marketData} />}
@@ -158,9 +196,11 @@ function App() {
         {activeTab === 'Corretoras' && <ExchangesTab exchanges={config.exchanges} sendCommand={sendCommand} />}
         {activeTab === 'Autobot' && <AutobotTab isSpatialActive={config.is_spatial_active} sendCommand={sendCommand} />}
         {activeTab === 'Base Sniper' && <SniperDashboard />}
+        {activeTab === 'Master Admin' && isAdmin && <AdminDashboard token={token} />}
+        {activeTab === 'Minha Conta' && <AccountSettings token={token} />}
 
         {/* Fallback for other tabs */}
-        {!['Cotações', 'Configurações', 'Histórico', 'Analytics', 'Autobot', 'Corretoras', 'Oceano Azul', 'Base Sniper'].includes(activeTab) && (
+        {!['Cotações', 'Configurações', 'Histórico', 'Analytics', 'Autobot', 'Corretoras', 'Oceano Azul', 'Base Sniper', 'Master Admin', 'Minha Conta'].includes(activeTab) && (
           <div className="text-zinc-500 py-10">Módulo em desenvolvimento...</div>
         )}
       </main>

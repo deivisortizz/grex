@@ -11,6 +11,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from cryptography.fernet import Fernet
 from web3 import AsyncWeb3, WebSocketProvider, AsyncHTTPProvider
+import jwt
 
 # ---------------------------------------------------------
 # Configuração de Ambiente e Logging
@@ -29,6 +30,8 @@ BASE_WSS_RPC   = os.getenv('BASE_RPC_WS')   or os.getenv('BASE_WSS_RPC')
 BASE_HTTP_RPC  = os.getenv('BASE_RPC_HTTP')  or os.getenv('BASE_HTTP_RPC')
 ROUTER_ADDRESS = os.getenv('ROUTER_ADDRESS', '0x4752ba5DBc23f44D87826276BF6Fd6b1C372aD24')
 SNIPER_WS_PORT = int(os.getenv('SNIPER_WS_PORT', 8766))
+JWT_SECRET = os.getenv("JWT_SECRET", "multi-tenant-super-secret-fallback")
+JWT_ALGORITHM = "HS256"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -277,17 +280,60 @@ class BaseMemeSniper:
 
     def init_db(self):
         db_path = os.path.join(DATA_DIR, 'sniper.db')
-        logger.info(f"📂 Conectando ao SQLite Sniper em {db_path}")
+        logger.info(f"📂 Conectando ao SQLite Sniper em {db_path} (Fase 2 - Multi-Tenant)")
         with sqlite3.connect(db_path) as conn:
             cursor = conn.cursor()
+            
+            # Tabela de Usuários (SaaS)
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS users (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    email TEXT UNIQUE NOT NULL,
+                    password_hash TEXT NOT NULL,
+                    is_admin BOOLEAN DEFAULT 0,
+                    is_active BOOLEAN DEFAULT 1,
+                    subscription_expires TIMESTAMP,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            
+            # Tabela de Configurações por Usuário
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS user_configs (
+                    user_id INTEGER PRIMARY KEY,
+                    snipe_size_eth REAL DEFAULT 0.005,
+                    min_pool_weth REAL DEFAULT 0.05,
+                    tp_pct REAL DEFAULT 50.0,
+                    sl_pct REAL DEFAULT 15.0,
+                    FOREIGN KEY(user_id) REFERENCES users(id)
+                )
+            ''')
+
             # Tabela de segurança isolada para Burner Wallet
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS burner_wallet (
                     id INTEGER PRIMARY KEY,
                     address TEXT,
-                    pk_encrypted TEXT
+                    pk_encrypted TEXT,
+                    user_id INTEGER,
+                    FOREIGN KEY(user_id) REFERENCES users(id)
                 )
             ''')
+            
+            # Migração: Adicionar user_id na burner_wallet se não existir (retrocompatibilidade)
+            cursor.execute("PRAGMA table_info(burner_wallet)")
+            columns = [col[1] for col in cursor.fetchall()]
+            if 'user_id' not in columns:
+                logger.info("Migrando tabela burner_wallet para incluir user_id...")
+                cursor.execute("ALTER TABLE burner_wallet ADD COLUMN user_id INTEGER REFERENCES users(id)")
+                
+            # Migração: Adicionar is_active na users se não existir
+            cursor.execute("PRAGMA table_info(users)")
+            user_cols = [col[1] for col in cursor.fetchall()]
+            if 'is_active' not in user_cols and len(user_cols) > 0:
+                logger.info("Migrando tabela users para incluir is_active...")
+                cursor.execute("ALTER TABLE users ADD COLUMN is_active BOOLEAN DEFAULT 1")
+
             conn.commit()
 
     def _sync_get_wallet(self):
@@ -981,10 +1027,35 @@ class BaseMemeSniper:
     # WebSocket Server (Comunicação com React)
     # ---------------------------------------------------------
     async def ws_handler(self, websocket):
-        self.connected_clients.add(websocket)
-        logger.info(f"🔌 [WS] Cliente conectado no painel Sniper. Total: {len(self.connected_clients)}")
+        logger.info(f"🔌 [WS] Nova conexão solicitada. Aguardando autenticação JWT...")
         
         try:
+            # Aguarda a primeira mensagem que deve ser a autenticação
+            auth_message = await asyncio.wait_for(websocket.recv(), timeout=10.0)
+            auth_data = json.loads(auth_message)
+            
+            if auth_data.get("type") != "auth" or not auth_data.get("token"):
+                logger.warning("❌ [WS] Conexão recusada: Token ausente ou formato inválido.")
+                await websocket.close(code=1008, reason="Authentication required")
+                return
+                
+            token = auth_data.get("token")
+            try:
+                payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+                user_id = payload.get("sub")
+                logger.info(f"✅ [WS] Cliente autenticado (User ID: {user_id})")
+            except jwt.ExpiredSignatureError:
+                logger.warning("❌ [WS] Conexão recusada: Token expirado.")
+                await websocket.close(code=1008, reason="Token expired")
+                return
+            except jwt.InvalidTokenError:
+                logger.warning("❌ [WS] Conexão recusada: Token inválido.")
+                await websocket.close(code=1008, reason="Invalid token")
+                return
+
+            self.connected_clients.add(websocket)
+            logger.info(f"🔌 [WS] Cliente adicionado ao pool. Total: {len(self.connected_clients)}")
+            
             # Enviar status inicial da carteira e do robô
             status_payload = {
                 "type": "wallet_status",

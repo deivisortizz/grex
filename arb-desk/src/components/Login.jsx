@@ -1,20 +1,37 @@
 import { useState } from 'react'
-import { Lock, Mail, Key, ShieldAlert, ArrowRight } from 'lucide-react'
+import { Lock, Mail, Key, ShieldAlert, ArrowRight, UserPlus } from 'lucide-react'
 
 export default function Login({ onLogin }) {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
-  const [error, setError] = useState(false)
+  const [error, setError] = useState(null)
+  const [loading, setLoading] = useState(false)
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault()
+    setError(null)
+    setLoading(true)
     
-    // Verificação de credenciais Master
-    if (email === 'digitalgrex@gmail.com' && password === '@Grex9899') {
-      setError(false)
-      onLogin()
-    } else {
-      setError(true)
+    try {
+      const response = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password })
+      })
+
+      const data = await response.json()
+
+      if (response.ok) {
+        localStorage.setItem('token', data.access_token)
+        localStorage.setItem('is_admin', data.is_admin ? 'true' : 'false')
+        onLogin(data.access_token, data.is_admin)
+      } else {
+        setError(data.detail || 'Credenciais inválidas.')
+      }
+    } catch (err) {
+      setError('Erro ao conectar com o servidor.')
+    } finally {
+      setLoading(false)
     }
   }
 
@@ -39,17 +56,17 @@ export default function Login({ onLogin }) {
             <div className="w-16 h-16 bg-gradient-to-br from-emerald-400 to-emerald-600 rounded-2xl flex items-center justify-center shadow-[0_0_30px_rgba(16,185,129,0.3)] mb-6">
               <Lock size={32} className="text-zinc-950" />
             </div>
-            <h1 className="text-2xl font-bold text-white tracking-tight">Acesso Restrito</h1>
+            <h1 className="text-2xl font-bold text-white tracking-tight">Acesso ao Sistema</h1>
             <p className="text-zinc-500 text-sm mt-2 text-center">
-              Painel de Controle Institucional HFT<br />
-              <span className="text-emerald-500 font-mono text-xs mt-1 block">AXOLOTE ENGINE V2.0</span>
+              Plataforma Multi-Tenant HFT<br />
+              <span className="text-emerald-500 font-mono text-xs mt-1 block">SaaS ENGINE V2.0</span>
             </p>
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-5">
             
             <div className="space-y-1.5">
-              <label className="text-xs font-bold text-zinc-400 uppercase tracking-wider ml-1">E-mail Master</label>
+              <label className="text-xs font-bold text-zinc-400 uppercase tracking-wider ml-1">E-mail</label>
               <div className="relative">
                 <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
                   <Mail size={18} className="text-zinc-600" />
@@ -59,14 +76,14 @@ export default function Login({ onLogin }) {
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   className="w-full bg-zinc-950 border border-zinc-800 text-white rounded-xl py-3.5 pl-12 pr-4 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-all font-mono text-sm"
-                  placeholder="admin@grex.com"
+                  placeholder="usuario@dominio.com"
                   required
                 />
               </div>
             </div>
 
             <div className="space-y-1.5">
-              <label className="text-xs font-bold text-zinc-400 uppercase tracking-wider ml-1">Senha de Acesso</label>
+              <label className="text-xs font-bold text-zinc-400 uppercase tracking-wider ml-1">Senha</label>
               <div className="relative">
                 <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
                   <Key size={18} className="text-zinc-600" />
@@ -85,16 +102,17 @@ export default function Login({ onLogin }) {
             {error && (
               <div className="flex items-center gap-2 bg-rose-500/10 border border-rose-500/20 text-rose-400 p-3 rounded-lg text-sm animate-pulse">
                 <ShieldAlert size={16} />
-                <span>Acesso negado. Credenciais inválidas.</span>
+                <span>{error}</span>
               </div>
             )}
 
             <button
               type="submit"
-              className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-4 rounded-xl flex items-center justify-center gap-2 transition-all shadow-[0_0_20px_rgba(16,185,129,0.2)] hover:shadow-[0_0_30px_rgba(16,185,129,0.4)] group mt-4"
+              disabled={loading}
+              className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold py-4 rounded-xl flex items-center justify-center gap-2 transition-all shadow-[0_0_20px_rgba(16,185,129,0.2)] hover:shadow-[0_0_30px_rgba(16,185,129,0.4)] group mt-4"
             >
-              AUTENTICAR
-              <ArrowRight size={18} className="group-hover:translate-x-1 transition-transform" />
+              {loading ? 'AUTENTICANDO...' : 'ENTRAR'}
+              {!loading && <ArrowRight size={18} className="group-hover:translate-x-1 transition-transform" />}
             </button>
           </form>
 
@@ -102,7 +120,7 @@ export default function Login({ onLogin }) {
 
         {/* Footer info */}
         <p className="text-center text-zinc-600 text-xs mt-8 font-mono">
-          © {new Date().getFullYear()} Grex Capital. All systems operational.
+          © {new Date().getFullYear()} Grex Capital. SaaS Infrastructure.
         </p>
 
       </div>

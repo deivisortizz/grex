@@ -8,6 +8,8 @@ import {
   HelpCircle,
   Waves,
   Flame,
+  Shield,
+  User
 } from 'lucide-react'
 
 const navItems = [
@@ -19,10 +21,14 @@ const navItems = [
   { name: 'Configurações', icon: Settings },
   { name: 'Corretoras', icon: Target },
   { name: 'Autobot', icon: Bot },
+  { name: 'Minha Conta', icon: User },
   { name: 'Guia de Ativação', icon: HelpCircle },
 ]
 
-export default function Sidebar({ wsStatus = 'Offline', ping, activeTab, setActiveTab, isOpen, setIsOpen }) {
+export default function Sidebar({ wsStatus = 'Offline', ping, activeTab, setActiveTab, isOpen, setIsOpen, isAdmin }) {
+  const visibleNavItems = isAdmin 
+    ? [...navItems, { name: 'Master Admin', icon: Shield, accent: 'purple' }] 
+    : navItems
   return (
     <>
       {/* Mobile overlay */}
@@ -45,10 +51,11 @@ export default function Sidebar({ wsStatus = 'Offline', ping, activeTab, setActi
         <p className="text-xs text-zinc-400 mt-1">HFT Engine Interface</p>
       </div>
       <nav className="flex-1 px-4 space-y-1 mt-4 overflow-y-auto">
-        {navItems.map((item) => {
+        {visibleNavItems.map((item) => {
           const Icon = item.icon
           const isOcean = item.name === 'Oceano Azul'
           const isSniper = item.name === 'Base Sniper'
+          const isAdminTab = item.name === 'Master Admin'
           return (
             <button
               key={item.name}
@@ -59,7 +66,9 @@ export default function Sidebar({ wsStatus = 'Offline', ping, activeTab, setActi
                     ? 'bg-blue-500/10 text-white border border-blue-500/30'
                     : isSniper
                       ? 'bg-orange-500/10 text-white border border-orange-500/30'
-                      : 'bg-zinc-800 text-white'
+                      : isAdminTab
+                        ? 'bg-purple-500/10 text-white border border-purple-500/30'
+                        : 'bg-zinc-800 text-white'
                   : 'text-zinc-400 hover:text-white hover:bg-zinc-800/50'
               }`}
             >
@@ -67,7 +76,7 @@ export default function Sidebar({ wsStatus = 'Offline', ping, activeTab, setActi
                 size={18}
                 className={
                   activeTab === item.name
-                    ? isOcean ? 'text-blue-400' : isSniper ? 'text-orange-400' : 'text-emerald-400'
+                    ? isOcean ? 'text-blue-400' : isSniper ? 'text-orange-400' : isAdminTab ? 'text-purple-400' : 'text-emerald-400'
                     : ''
                 }
               />
@@ -80,6 +89,11 @@ export default function Sidebar({ wsStatus = 'Offline', ping, activeTab, setActi
               {isSniper && (
                 <span className="ml-auto text-[9px] font-bold uppercase tracking-widest text-orange-500/70 bg-orange-500/10 px-1.5 py-0.5 rounded">
                   BASE
+                </span>
+              )}
+              {isAdminTab && (
+                <span className="ml-auto text-[9px] font-bold uppercase tracking-widest text-purple-500/70 bg-purple-500/10 px-1.5 py-0.5 rounded">
+                  SAAS
                 </span>
               )}
             </button>
