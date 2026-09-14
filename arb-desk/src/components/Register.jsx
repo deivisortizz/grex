@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Lock, Mail, Key, ShieldAlert, ArrowRight, LogIn } from 'lucide-react'
 
-export default function Register({ onNavigateLogin, inviteCode }) {
+export default function Register({ onNavigateLogin, inviteToken }) {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
@@ -24,7 +24,7 @@ export default function Register({ onNavigateLogin, inviteCode }) {
       const response = await fetch('/api/auth/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password, invite_code: inviteCode })
+        body: JSON.stringify({ email, password, token: inviteToken })
       })
 
       const data = await response.json()
@@ -54,6 +54,24 @@ export default function Register({ onNavigateLogin, inviteCode }) {
           className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3 px-8 rounded-xl transition-all shadow-[0_0_20px_rgba(16,185,129,0.2)]"
         >
           Ir para Login
+        </button>
+      </div>
+    )
+  }
+
+  if (!inviteToken) {
+    return (
+      <div className="min-h-screen bg-zinc-950 flex flex-col items-center justify-center p-4 font-sans text-center">
+        <div className="w-16 h-16 bg-rose-500/20 text-rose-400 rounded-full flex items-center justify-center mb-4">
+          <ShieldAlert size={32} />
+        </div>
+        <h2 className="text-2xl font-bold text-white mb-2">Acesso Restrito</h2>
+        <p className="text-zinc-400 mb-6 max-w-sm">Link de convite inválido ou ausente. Você precisa de um convite do administrador para criar uma conta.</p>
+        <button 
+          onClick={onNavigateLogin}
+          className="bg-zinc-800 hover:bg-zinc-700 text-white font-bold py-3 px-8 rounded-xl transition-all"
+        >
+          Voltar ao Login
         </button>
       </div>
     )

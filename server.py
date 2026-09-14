@@ -6,6 +6,7 @@ from pydantic import BaseModel
 import os
 import sqlite3
 import jwt
+import uuid
 from passlib.context import CryptContext
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
@@ -44,6 +45,14 @@ def init_db():
                 FOREIGN KEY(user_id) REFERENCES users(id)
             )
         ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS invites (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                token TEXT UNIQUE NOT NULL,
+                used BOOLEAN DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
         conn.commit()
 
 init_db()
@@ -61,7 +70,7 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 class UserRegister(BaseModel):
     email: str
     password: str
-    invite_code: str = None
+    token: str
 
 class UserLogin(BaseModel):
     email: str
@@ -115,10 +124,12 @@ def get_current_admin(token: str = Depends(oauth2_scheme), db: sqlite3.Connectio
 
 @app.post("/api/auth/register")
 def register_user(user: UserRegister, db: sqlite3.Connection = Depends(get_db)):
-    if user.invite_code != "grex-beta-2026":
+    cursor = db.cursor()
+    cursor.execute("SELECT id FROM invites WHERE token = ? AND used = 0", (user.token,))
+    invite = cursor.fetchone()
+    if not invite:
         raise HTTPException(status_code=403, detail="Convite de acesso inválido ou expirado.")
 
-    cursor = db.cursor()
     cursor.execute("SELECT id FROM users WHERE email = ?", (user.email,))
     if cursor.fetchone():
         raise HTTPException(status_code=400, detail="Email já cadastrado")
@@ -134,6 +145,10 @@ def register_user(user: UserRegister, db: sqlite3.Connection = Depends(get_db)):
         user_id = cursor.lastrowid
         # Cria uma config default para o usuário
         cursor.execute("INSERT INTO user_configs (user_id) VALUES (?)", (user_id,))
+        
+        # Marca o convite como usado
+        cursor.execute("UPDATE invites SET used = 1 WHERE id = ?", (invite["id"],))
+        
         db.commit()
         return {"msg": "Usuário criado com sucesso", "is_admin": bool(is_admin)}
     except Exception as e:
@@ -182,6 +197,14 @@ def get_users(admin = Depends(get_current_admin), db: sqlite3.Connection = Depen
     cursor.execute("SELECT id, email, is_admin, is_active, subscription_expires, created_at FROM users")
     users = [dict(row) for row in cursor.fetchall()]
     return {"users": users}
+
+@app.post("/api/admin/generate-invite")
+def generate_invite(admin = Depends(get_current_admin), db: sqlite3.Connection = Depends(get_db)):
+    token = str(uuid.uuid4())
+    cursor = db.cursor()
+    cursor.execute("INSERT INTO invites (token) VALUES (?)", (token,))
+    db.commit()
+    return {"invite_token": token}
 
 @app.post("/api/admin/user/{id}/extend")
 def extend_user(id: int, request: ExtendRequest, admin = Depends(get_current_admin), db: sqlite3.Connection = Depends(get_db)):

@@ -6,6 +6,9 @@ export default function AdminDashboard({ token }) {
   const [users, setUsers] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  
+  const [inviteLink, setInviteLink] = useState('')
+  const [loadingInvite, setLoadingInvite] = useState(false)
 
   const fetchData = async () => {
     try {
@@ -93,6 +96,30 @@ export default function AdminDashboard({ token }) {
     }
   }
 
+  const handleGenerateInvite = async () => {
+    setLoadingInvite(true)
+    setInviteLink('')
+    try {
+      const res = await fetch('/api/admin/generate-invite', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` }
+      })
+      if (res.ok) {
+        const data = await res.json()
+        const link = `${window.location.origin}/register?token=${data.invite_token}`
+        setInviteLink(link)
+        navigator.clipboard.writeText(link)
+        alert("Link gerado e copiado para a área de transferência!")
+      } else {
+        alert("Erro ao gerar convite.")
+      }
+    } catch (err) {
+      alert("Erro de conexão ao gerar convite.")
+    } finally {
+      setLoadingInvite(false)
+    }
+  }
+
   if (loading) {
     return <div className="p-8 text-zinc-400">Carregando painel de administração...</div>
   }
@@ -139,11 +166,34 @@ export default function AdminDashboard({ token }) {
       </div>
 
       <div className="bg-zinc-900/80 backdrop-blur-xl border border-zinc-800 rounded-2xl shadow-xl overflow-hidden">
-        <div className="p-6 border-b border-zinc-800">
+        <div className="p-6 border-b border-zinc-800 flex justify-between items-center">
           <h3 className="text-lg font-bold text-white flex items-center gap-2">
             <Shield size={20} className="text-purple-400" />
             Gestão de Clientes
           </h3>
+          
+          <div className="flex items-center gap-3">
+            {inviteLink && (
+              <input 
+                type="text" 
+                readOnly 
+                value={inviteLink} 
+                className="bg-zinc-950 border border-zinc-700 text-zinc-300 text-xs rounded-lg px-3 py-2 w-64 focus:outline-none"
+                onClick={(e) => {
+                  e.target.select();
+                  navigator.clipboard.writeText(inviteLink);
+                  alert("Copiado!");
+                }}
+              />
+            )}
+            <button
+              onClick={handleGenerateInvite}
+              disabled={loadingInvite}
+              className="bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white text-sm font-semibold py-2 px-4 rounded-lg flex items-center gap-2 transition-colors"
+            >
+              {loadingInvite ? 'Gerando...' : 'Gerar Convite'}
+            </button>
+          </div>
         </div>
         
         <div className="overflow-x-auto">

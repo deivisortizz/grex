@@ -131,12 +131,12 @@ function App() {
   }
 
   const urlParams = new URLSearchParams(window.location.search);
-  const inviteCode = urlParams.get('invite');
-  const isInviteRoute = window.location.pathname === '/register' && inviteCode === 'grex-beta-2026';
+  const inviteToken = urlParams.get('token');
+  const isInviteRoute = window.location.pathname === '/register' && inviteToken;
 
   if (!isAuthenticated) {
     if (isInviteRoute) {
-      return <Register inviteCode={inviteCode} onNavigateLogin={() => window.location.href = '/'} />
+      return <Register inviteToken={inviteToken} onNavigateLogin={() => window.location.href = '/'} />
     }
     return <Login onLogin={handleLogin} />
   }
