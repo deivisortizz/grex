@@ -8,21 +8,49 @@ export default function ExchangesTab({ exchanges = [], sendCommand }) {
     secret: '',
     password: ''
   })
+  
+  const [successMsg, setSuccessMsg] = useState('')
 
-  const handleConnect = (e) => {
+  const handleConnect = async (e) => {
     e.preventDefault()
     if (!formData.apiKey || !formData.secret) return
 
-    sendCommand('add_exchange', {
-      exchange: formData.exchange,
-      credentials: {
-        apiKey: formData.apiKey,
-        secret: formData.secret,
-        password: formData.password || undefined
+    try {
+      const token = localStorage.getItem('token')
+      
+      // Salva no banco via API (somente Binance no escopo atual, adaptável depois)
+      if (formData.exchange === 'binance') {
+        const res = await fetch('/api/user/binance', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          },
+          body: JSON.stringify({ api_key: formData.apiKey, api_secret: formData.secret })
+        })
+        
+        if (!res.ok) {
+          console.error("Erro na API ao salvar corretora")
+          return
+        }
       }
-    })
 
-    setFormData({ ...formData, apiKey: '', secret: '', password: '' })
+      // Envia para o WS para instanciar a corretora na memória viva do bot sem precisar reiniciar
+      sendCommand('add_exchange', {
+        exchange: formData.exchange,
+        credentials: {
+          apiKey: formData.apiKey,
+          secret: formData.secret,
+          password: formData.password || undefined
+        }
+      })
+
+      setFormData({ ...formData, apiKey: '', secret: '', password: '' })
+      setSuccessMsg('Corretora conectada com sucesso!')
+      setTimeout(() => setSuccessMsg(''), 5000)
+    } catch (err) {
+      console.error("Falha ao salvar corretora:", err)
+    }
   }
 
   return (
@@ -72,6 +100,13 @@ export default function ExchangesTab({ exchanges = [], sendCommand }) {
             </div>
             <h3 className="text-lg font-bold text-white">Adicionar Corretora</h3>
           </div>
+          
+          {successMsg && (
+            <div className="mb-6 p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center gap-3 animate-pulse">
+              <Shield size={24} className="text-emerald-500" />
+              <p className="text-sm font-bold text-emerald-400">{successMsg}</p>
+            </div>
+          )}
           
           <form onSubmit={handleConnect} className="space-y-4">
             <div>

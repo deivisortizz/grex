@@ -263,7 +263,7 @@ def save_user_wallet(req: WalletReq, current_user = Depends(get_current_user), d
     cursor.execute("INSERT INTO burner_wallet (address, pk_encrypted, user_id) VALUES (?, ?, ?)", 
                    (req.address, req.private_key, current_user["id"]))
     db.commit()
-    return {"msg": "Wallet salva"}
+    return {"status": "success", "message": "Carteira criptografada e salva com sucesso!"}
 
 @app.delete("/api/user/wallet")
 def delete_user_wallet(current_user = Depends(get_current_user), db: sqlite3.Connection = Depends(get_db)):
@@ -292,7 +292,7 @@ def save_user_binance(req: BinanceReq, current_user = Depends(get_current_user),
     cursor.execute("INSERT INTO api_keys (user_id, exchange, api_key, api_secret) VALUES (?, 'binance', ?, ?)", 
                    (current_user["id"], req.api_key, req.api_secret))
     db.commit()
-    return {"msg": "Chaves da Binance salvas"}
+    return {"status": "success", "message": "Corretora conectada com sucesso!"}
 
 @app.delete("/api/user/binance")
 def delete_user_binance(current_user = Depends(get_current_user), db: sqlite3.Connection = Depends(get_db)):

@@ -37,8 +37,8 @@ function App() {
   useEffect(() => {
     const currentHost = window.location.hostname;
     const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const defaultWsUrl = `${wsProtocol}//${currentHost}:8765`;
-    const wsUrl = import.meta.env.VITE_WS_URL || defaultWsUrl;
+    // Ignorando .env local hardcoded e forçando uso dinâmico para evitar ERR_CONNECTION_REFUSED
+    const wsUrl = `${wsProtocol}//${currentHost}:8765`;
     
     const ws = new WebSocket(wsUrl)
     wsRef.current = ws

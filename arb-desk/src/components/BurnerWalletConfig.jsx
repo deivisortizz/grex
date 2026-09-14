@@ -7,14 +7,15 @@ export default function BurnerWalletConfig() {
   const [walletStatus, setWalletStatus] = useState(null)
   const [isConnected, setIsConnected] = useState(false)
   
+  const [successMsg, setSuccessMsg] = useState('')
+  
   const wsRef = useRef(null)
 
   useEffect(() => {
-    // Configura a URL dinamicamente via ENV ou usando window.location
+    // Configura a URL dinamicamente via window.location (ignora hardcoded .env)
     const host = window.location.hostname;
     const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const defaultWsUrl = `${wsProtocol}//${host}:8766`;
-    const wsUrl = import.meta.env.VITE_SNIPER_WS_URL || defaultWsUrl;
+    const wsUrl = `${wsProtocol}//${host}:8766`;
     const ws = new WebSocket(wsUrl)
     wsRef.current = ws
 
@@ -46,20 +47,40 @@ export default function BurnerWalletConfig() {
     }
   }, [])
 
-  const handleSaveWallet = (e) => {
+  const handleSaveWallet = async (e) => {
     e.preventDefault()
     if (!address || !privateKey) return
     
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({
-        type: 'add_wallet',
-        address: address,
-        private_key: privateKey
-      }))
-      
-      // Limpar formulário por segurança visual
-      setAddress('')
-      setPrivateKey('')
+    try {
+      const token = localStorage.getItem('token')
+      const res = await fetch('/api/user/wallet', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ address, private_key: privateKey })
+      })
+
+      if (res.ok) {
+        // Envia para o WS apenas para atualizar a memória viva do bot sem restart
+        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+          wsRef.current.send(JSON.stringify({
+            type: 'add_wallet',
+            address: address,
+            private_key: privateKey
+          }))
+        }
+        
+        setAddress('')
+        setPrivateKey('')
+        setSuccessMsg('Carteira criptografada e salva com sucesso!')
+        setTimeout(() => setSuccessMsg(''), 5000)
+      } else {
+        console.error("Erro na API ao salvar carteira")
+      }
+    } catch (err) {
+      console.error("Falha ao salvar carteira:", err)
     }
   }
 
@@ -86,6 +107,14 @@ export default function BurnerWalletConfig() {
           {isConnected ? 'SNIPER WS ON' : 'SNIPER WS OFF'}
         </div>
       </div>
+
+      {/* Alerta de Sucesso (Feedback Visual) */}
+      {successMsg && (
+        <div className="mb-6 p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center gap-3 animate-pulse">
+          <CheckCircle2 size={24} className="text-emerald-500" />
+          <p className="text-sm font-bold text-emerald-400">{successMsg}</p>
+        </div>
+      )}
 
       {/* Status Atual */}
       {walletStatus ? (
