@@ -281,6 +281,42 @@ export default function AdminDashboard({ token }) {
           </table>
         </div>
       </div>
+
+      {/* Danger Zone: Reset System */}
+      <div className="bg-rose-950/20 border border-rose-500/20 rounded-2xl p-6 mt-8">
+        <h3 className="text-rose-500 font-bold mb-2 flex items-center gap-2">
+          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"></path><path d="M12 9v4"></path><path d="M12 17h.01"></path></svg>
+          Zona de Perigo
+        </h3>
+        <p className="text-sm text-zinc-400 mb-6">
+          Isso apagará o cofre de chaves, histórico de trades, todos os usuários e resetará completamente o banco de dados da aplicação. Esta ação é IRREVERSÍVEL.
+        </p>
+        <button
+          onClick={async () => {
+            if (!window.confirm("Tem certeza absoluta que deseja ZERAR todo o sistema? Esta ação é IRREVERSÍVEL.")) return;
+            try {
+              localStorage.clear();
+              sessionStorage.clear();
+              const response = await fetch('/api/admin/reset-system', {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${token}` }
+              });
+              if (response.ok) {
+                alert("Sistema zerado com sucesso! A página será recarregada.");
+                window.location.reload();
+              } else {
+                alert("Erro ao resetar o sistema pelo servidor.");
+              }
+            } catch (error) {
+              console.error("Erro na requisição de reset:", error);
+              alert("Falha de conexão ao tentar resetar.");
+            }
+          }}
+          className="px-4 py-2 bg-rose-500 hover:bg-rose-600 text-white font-bold rounded-lg transition-colors flex items-center gap-2"
+        >
+          🗑️ Zerar Tudo / Resetar Sistema
+        </button>
+      </div>
     </div>
   )
 }

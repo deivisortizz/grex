@@ -326,6 +326,33 @@ def clear_all_exchanges(db: sqlite3.Connection = Depends(get_db)):
                 
     return {"status": "success", "message": "Tabela api_keys 100% zerada em todos os bancos."}
 
+@app.post("/api/admin/reset-system")
+def reset_system(current_user = Depends(get_current_admin)):
+    try:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        
+        # Arquivos a serem apagados
+        files_to_remove = [
+            os.path.join(base_dir, "data", "trades.db"),
+            os.path.join(base_dir, "data", ".master.key"),
+            os.path.join(base_dir, "data", "base_meme_sniper.db"),
+            os.path.join(base_dir, "sniper.db")
+        ]
+        
+        removed = []
+        for file_path in files_to_remove:
+            if os.path.exists(file_path):
+                # Importante: Como o SQLite pode estar com o arquivo travado, tentamos remover
+                try:
+                    os.remove(file_path)
+                    removed.append(file_path)
+                except Exception as e:
+                    print(f"Erro ao remover {file_path}: {e}")
+                    
+        return {"status": "success", "message": f"Sistema resetado. {len(removed)} arquivos apagados. Por favor, reinicie os containers."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/api/analytics")
 def get_analytics(current_user = Depends(get_current_user)):
     db_path = os.path.join(DATA_DIR, 'trades.db')
