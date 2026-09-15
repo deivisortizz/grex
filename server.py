@@ -74,6 +74,33 @@ def init_db():
         ''')
         conn.commit()
 
+    # Inicializar trades.db (Bot de Arbitragem CCXT) também, caso server.py inicie antes
+    trades_db_path = os.path.join(DATA_DIR, 'trades.db')
+    with sqlite3.connect(trades_db_path, check_same_thread=False) as conn_trades:
+        cursor_trades = conn_trades.cursor()
+        cursor_trades.execute('''
+            CREATE TABLE IF NOT EXISTS history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                timestamp TEXT,
+                exchange_buy TEXT,
+                exchange_sell TEXT,
+                spread_bruto REAL,
+                lucro_liquido REAL
+            )
+        ''')
+        cursor_trades.execute('''
+            CREATE TABLE IF NOT EXISTS api_keys (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                exchange TEXT,
+                key_encrypted TEXT,
+                secret_encrypted TEXT,
+                password_encrypted TEXT
+            )
+        ''')
+        conn_trades.commit()
+
 init_db()
 
 def get_db():
