@@ -104,6 +104,17 @@ def init_db():
                 sl_pct REAL DEFAULT 20.0
             )
         ''')
+        # Migrações seguras (adicionar colunas se não existirem)
+        try:
+            cursor.execute("ALTER TABLE solana_sniper_configs ADD COLUMN tp_pct REAL DEFAULT 100.0")
+        except sqlite3.OperationalError:
+            pass # Coluna já existe
+
+        try:
+            cursor.execute("ALTER TABLE solana_sniper_configs ADD COLUMN sl_pct REAL DEFAULT 20.0")
+        except sqlite3.OperationalError:
+            pass # Coluna já existe
+
         conn.commit()
 
     # Inicializar trades.db (Bot de Arbitragem CCXT) também, caso server.py inicie antes
@@ -178,8 +189,8 @@ class SolanaConfigReq(BaseModel):
     target_token: str
     slippage: float
     jito_tip: float
-    tp_pct: float
-    sl_pct: float
+    tp_pct: float = 100.0
+    sl_pct: float = 20.0
 
 class BinanceReq(BaseModel):
     api_key: str
