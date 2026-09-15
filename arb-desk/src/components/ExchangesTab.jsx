@@ -2,6 +2,13 @@ import { useState } from 'react'
 import { Plus, Server, Key, Shield, EyeOff } from 'lucide-react'
 
 export default function ExchangesTab({ exchanges = [], sendCommand }) {
+  const [localExchanges, setLocalExchanges] = useState(exchanges)
+
+  // Sincroniza estado local com prop externa quando vier do WebSocket (se vier)
+  useEffect(() => {
+    setLocalExchanges(exchanges)
+  }, [exchanges])
+
   const [formData, setFormData] = useState({
     exchange: '',
     apiKey: '',
@@ -46,10 +53,34 @@ export default function ExchangesTab({ exchanges = [], sendCommand }) {
       })
 
       setFormData({ ...formData, apiKey: '', secret: '', password: '' })
+      setLocalExchanges(prev => {
+        const uppercaseEx = formData.exchange.toUpperCase()
+        if (prev.includes(uppercaseEx)) return prev
+        return [...prev, uppercaseEx]
+      })
       setSuccessMsg('Corretora conectada com sucesso!')
       setTimeout(() => setSuccessMsg(''), 5000)
     } catch (err) {
       console.error("Falha ao salvar corretora:", err)
+    }
+  }
+
+  const handleDelete = async (ex) => {
+    if (!window.confirm(`Tem certeza que deseja remover a corretora ${ex}?`)) return;
+    
+    try {
+      if (ex.toLowerCase() === 'binance') {
+        const token = localStorage.getItem('token')
+        await fetch('/api/user/binance', {
+          method: 'DELETE',
+          headers: { 'Authorization': `Bearer ${token}` }
+        })
+      }
+      
+      sendCommand('delete_exchange', { exchange: ex })
+      setLocalExchanges(prev => prev.filter(e => e !== ex))
+    } catch (err) {
+      console.error("Falha ao deletar corretora:", err)
     }
   }
 
@@ -59,7 +90,7 @@ export default function ExchangesTab({ exchanges = [], sendCommand }) {
       <div>
         <h3 className="text-lg font-bold text-white mb-6">Corretoras Ativas (HFT)</h3>
         <div className="space-y-4">
-          {exchanges.map((ex) => (
+          {localExchanges.map((ex) => (
             <div key={ex} className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 flex items-center justify-between">
               <div className="flex items-center gap-4">
                 <div className="w-10 h-10 rounded-full bg-zinc-800 flex items-center justify-center">
@@ -76,7 +107,7 @@ export default function ExchangesTab({ exchanges = [], sendCommand }) {
                   <span className="text-xs font-bold text-emerald-500 uppercase">Live</span>
                 </div>
                 <button
-                  onClick={() => sendCommand('delete_exchange', { exchange: ex })}
+                  onClick={() => handleDelete(ex)}
                   className="p-1.5 bg-rose-500/10 text-rose-500 rounded hover:bg-rose-500/20 transition-colors"
                   title="Deletar Corretora"
                 >
@@ -85,7 +116,7 @@ export default function ExchangesTab({ exchanges = [], sendCommand }) {
               </div>
             </div>
           ))}
-          {exchanges.length === 0 && (
+          {localExchanges.length === 0 && (
             <p className="text-zinc-500 text-sm">Nenhuma corretora conectada.</p>
           )}
         </div>
