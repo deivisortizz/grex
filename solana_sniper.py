@@ -9,6 +9,7 @@ import logging
 import sys
 from datetime import datetime
 from dotenv import load_dotenv
+from cryptography.fernet import Fernet
 
 load_dotenv()
 
@@ -41,6 +42,19 @@ class SolanaSniper:
         # Estado separado por user_id
         # user_id -> { "config": { ... }, "is_active": bool, "wallet": str }
         self.user_states = {}
+        self.init_crypto()
+
+    def init_crypto(self):
+        key_path = os.path.join(DATA_DIR, '.master.key')
+        if not os.path.exists(key_path):
+            logger.error("❌ [COFRE] Chave Mestra (.master.key) não encontrada! Inicialização abortada.")
+            self.cipher = None
+            return
+        
+        with open(key_path, 'rb') as f:
+            key = f.read()
+        self.cipher = Fernet(key)
+        logger.info(f"🔑 [COFRE] Chave Mestra (Fernet) carregada com sucesso no Solana Sniper.")
 
     def _get_user_state(self, user_id):
         if user_id not in self.user_states:
@@ -57,7 +71,7 @@ class SolanaSniper:
         return self.user_states[user_id]
 
     def _load_user_config_from_db(self, user_id):
-        db_path = os.path.join(DATA_DIR, 'solana_sniper.db')
+        db_path = os.path.join(DATA_DIR, 'sniper.db')
         if not os.path.exists(db_path):
             return False
             
@@ -79,7 +93,12 @@ class SolanaSniper:
                 cursor.execute("SELECT pk_encrypted FROM solana_burner_wallet WHERE user_id = ?", (user_id,))
                 wallet_row = cursor.fetchone()
                 if wallet_row and wallet_row[0]:
-                    state["wallet"] = wallet_row[0]
+                    try:
+                        decrypted_pk = self.cipher.decrypt(wallet_row[0].encode()).decode() if self.cipher else wallet_row[0]
+                        state["wallet"] = decrypted_pk
+                    except Exception as dec_err:
+                        logger.error(f"Erro ao descriptografar carteira Solana (User {user_id}): {dec_err}")
+                        state["wallet"] = None
                 else:
                     state["wallet"] = None
                     

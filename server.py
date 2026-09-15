@@ -7,9 +7,11 @@ import os
 import sqlite3
 import jwt
 import uuid
+import logging
 from passlib.context import CryptContext
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
+from cryptography.fernet import Fernet
 
 # Configurações de Ambiente
 env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
@@ -19,6 +21,17 @@ JWT_SECRET = os.getenv("JWT_SECRET", "multi-tenant-super-secret-fallback")
 JWT_ALGORITHM = "HS256"
 DATA_DIR = os.getenv('DATA_DIR', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data'))
 DB_PATH = os.path.join(DATA_DIR, 'sniper.db')
+
+# Setup Fernet Crypto
+key_path = os.path.join(DATA_DIR, '.master.key')
+if not os.path.exists(key_path):
+    master_key = Fernet.generate_key()
+    with open(key_path, 'wb') as f:
+        f.write(master_key)
+else:
+    with open(key_path, 'rb') as f:
+        master_key = f.read()
+cipher = Fernet(master_key)
 
 def init_db():
     os.makedirs(DATA_DIR, exist_ok=True)
@@ -72,13 +85,7 @@ def init_db():
                 FOREIGN KEY(user_id) REFERENCES users(id)
             )
         ''')
-        conn.commit()
-
-    # Inicializar solana_sniper.db isolado
-    solana_db_path = os.path.join(DATA_DIR, 'solana_sniper.db')
-    with sqlite3.connect(solana_db_path, check_same_thread=False) as conn_sol:
-        cursor_sol = conn_sol.cursor()
-        cursor_sol.execute('''
+        cursor.execute('''
             CREATE TABLE IF NOT EXISTS solana_burner_wallet (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 address TEXT,
@@ -86,7 +93,7 @@ def init_db():
                 user_id INTEGER
             )
         ''')
-        cursor_sol.execute('''
+        cursor.execute('''
             CREATE TABLE IF NOT EXISTS solana_sniper_configs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER UNIQUE,
@@ -95,7 +102,7 @@ def init_db():
                 jito_tip REAL
             )
         ''')
-        conn_sol.commit()
+        conn.commit()
 
     # Inicializar trades.db (Bot de Arbitragem CCXT) também, caso server.py inicie antes
     trades_db_path = os.path.join(DATA_DIR, 'trades.db')
@@ -128,15 +135,6 @@ init_db()
 
 def get_db():
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    try:
-        yield conn
-    finally:
-        conn.close()
-
-def get_solana_db():
-    solana_db_path = os.path.join(DATA_DIR, 'solana_sniper.db')
-    conn = sqlite3.connect(solana_db_path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     try:
         yield conn
@@ -322,13 +320,12 @@ def get_user_wallet(current_user = Depends(get_current_user), db: sqlite3.Connec
 
 @app.post("/api/user/wallet")
 def save_user_wallet(req: WalletReq, current_user = Depends(get_current_user), db: sqlite3.Connection = Depends(get_db)):
-    # Nota: No mundo real, a pk_encrypted deve ser criptografada. 
-    # Aqui delegamos para a mesma rotina (se precisar criptografar, deve usar a mesma chave mestra).
-    # Como as chaves são geridas por websocket normalmente, este endpoint garante fallback HTPP restrito.
     cursor = db.cursor()
     cursor.execute("DELETE FROM burner_wallet WHERE user_id = ?", (current_user["id"],))
+    # Encrypt the base private key with Fernet
+    encrypted_pk = cipher.encrypt(req.private_key.encode()).decode() if req.private_key else ""
     cursor.execute("INSERT INTO burner_wallet (address, pk_encrypted, user_id) VALUES (?, ?, ?)", 
-                   (req.address, req.private_key, current_user["id"]))
+                   (req.address, encrypted_pk, current_user["id"]))
     
     # Ativa automaticamente o usuário para que o motor execute snipes
     cursor.execute("UPDATE users SET is_active = 1 WHERE id = ?", (current_user["id"],))
@@ -344,8 +341,8 @@ def delete_user_wallet(current_user = Depends(get_current_user), db: sqlite3.Con
     return {"status": "success", "message": "Carteira removida com sucesso!"}
 
 @app.get("/api/user/solana_wallet")
-def get_user_solana_wallet(current_user = Depends(get_current_user), db_sol: sqlite3.Connection = Depends(get_solana_db)):
-    cursor = db_sol.cursor()
+def get_user_solana_wallet(current_user = Depends(get_current_user), db: sqlite3.Connection = Depends(get_db)):
+    cursor = db.cursor()
     cursor.execute("SELECT address FROM solana_burner_wallet WHERE user_id = ?", (current_user["id"],))
     row = cursor.fetchone()
     if not row:
@@ -353,14 +350,14 @@ def get_user_solana_wallet(current_user = Depends(get_current_user), db_sol: sql
     return {"address": row["address"]}
 
 @app.delete("/api/user/solana_wallet")
-def delete_user_solana_wallet(current_user = Depends(get_current_user), db_sol: sqlite3.Connection = Depends(get_solana_db)):
-    cursor = db_sol.cursor()
+def delete_user_solana_wallet(current_user = Depends(get_current_user), db: sqlite3.Connection = Depends(get_db)):
+    cursor = db.cursor()
     cursor.execute("DELETE FROM solana_burner_wallet WHERE user_id = ?", (current_user["id"],))
-    db_sol.commit()
+    db.commit()
     return {"status": "success", "message": "Carteira Solana removida com sucesso!"}
 
 @app.post("/api/user/solana_wallet")
-def save_user_solana_wallet(req: SolanaWalletReq, current_user = Depends(get_current_user), db_sol: sqlite3.Connection = Depends(get_solana_db), db: sqlite3.Connection = Depends(get_db)):
+def save_user_solana_wallet(req: SolanaWalletReq, current_user = Depends(get_current_user), db: sqlite3.Connection = Depends(get_db)):
     if not req.private_key or len(req.private_key) < 60:
         raise HTTPException(status_code=400, detail="Chave privada Solana inválida. Use o formato Base58.")
     
@@ -371,21 +368,21 @@ def save_user_solana_wallet(req: SolanaWalletReq, current_user = Depends(get_cur
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Erro ao decodificar chave Solana: {e}")
 
-    cursor = db_sol.cursor()
+    encrypted_pk = cipher.encrypt(req.private_key.encode()).decode()
+
+    cursor = db.cursor()
     cursor.execute("DELETE FROM solana_burner_wallet WHERE user_id = ?", (current_user["id"],))
     cursor.execute("INSERT INTO solana_burner_wallet (address, pk_encrypted, user_id) VALUES (?, ?, ?)", 
-                   (derived_address, req.private_key, current_user["id"]))
+                   (derived_address, encrypted_pk, current_user["id"]))
     
     # Ativa automaticamente o usuário
-    cursor_master = db.cursor()
-    cursor_master.execute("UPDATE users SET is_active = 1 WHERE id = ?", (current_user["id"],))
+    cursor.execute("UPDATE users SET is_active = 1 WHERE id = ?", (current_user["id"],))
     db.commit()
-    db_sol.commit()
     return {"status": "success", "message": f"Carteira Solana ({derived_address[:6]}...{derived_address[-4:]}) salva com sucesso!"}
 
 @app.get("/api/user/solana_config")
-def get_user_solana_config(current_user = Depends(get_current_user), db_sol: sqlite3.Connection = Depends(get_solana_db)):
-    cursor = db_sol.cursor()
+def get_user_solana_config(current_user = Depends(get_current_user), db: sqlite3.Connection = Depends(get_db)):
+    cursor = db.cursor()
     cursor.execute("SELECT target_token, slippage, jito_tip FROM solana_sniper_configs WHERE user_id = ?", (current_user["id"],))
     row = cursor.fetchone()
     if not row:
@@ -393,30 +390,23 @@ def get_user_solana_config(current_user = Depends(get_current_user), db_sol: sql
     return {"target_token": row["target_token"], "slippage": row["slippage"], "jito_tip": row["jito_tip"]}
 
 @app.post("/api/user/solana_config")
-def save_user_solana_config(req: SolanaConfigReq, current_user = Depends(get_current_user), db_sol: sqlite3.Connection = Depends(get_solana_db)):
+def save_user_solana_config(req: SolanaConfigReq, current_user = Depends(get_current_user), db: sqlite3.Connection = Depends(get_db)):
     if not req.target_token or len(req.target_token) < 32:
         raise HTTPException(status_code=400, detail="Token Mint inválido.")
         
-    cursor = db_sol.cursor()
+    cursor = db.cursor()
     cursor.execute("DELETE FROM solana_sniper_configs WHERE user_id = ?", (current_user["id"],))
     cursor.execute("INSERT INTO solana_sniper_configs (user_id, target_token, slippage, jito_tip) VALUES (?, ?, ?, ?)", 
                    (current_user["id"], req.target_token, req.slippage, req.jito_tip))
-    db_sol.commit()
+    db.commit()
     return {"status": "success", "message": "Configuração do Token salva com sucesso!"}
 
 @app.delete("/api/user/solana_config")
-def delete_user_solana_config(current_user = Depends(get_current_user), db_sol: sqlite3.Connection = Depends(get_solana_db)):
-    cursor = db_sol.cursor()
+def delete_user_solana_config(current_user = Depends(get_current_user), db: sqlite3.Connection = Depends(get_db)):
+    cursor = db.cursor()
     cursor.execute("DELETE FROM solana_sniper_configs WHERE user_id = ?", (current_user["id"],))
-    db_sol.commit()
+    db.commit()
     return {"status": "success", "message": "Configuração do Token apagada com sucesso!"}
-
-@app.delete("/api/user/solana_wallet")
-def delete_user_solana_wallet(current_user = Depends(get_current_user), db_sol: sqlite3.Connection = Depends(get_solana_db)):
-    cursor = db_sol.cursor()
-    cursor.execute("DELETE FROM solana_burner_wallet WHERE user_id = ?", (current_user["id"],))
-    db_sol.commit()
-    return {"status": "success", "message": "Carteira Solana removida com sucesso!"}
 
 
 @app.get("/api/user/binance")
