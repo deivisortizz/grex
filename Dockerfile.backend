@@ -36,5 +36,5 @@ RUN chmod +x start.sh
 # Expor as portas usadas pelos WebSockets e HTTP
 EXPOSE 8765 8766 3000
 
-# Entrypoint
+# Entrypoint único para gerenciar a stack completa via start.sh
 CMD ["/bin/bash", "start.sh"]
