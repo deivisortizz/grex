@@ -303,7 +303,28 @@ def delete_user_binance(current_user = Depends(get_current_user), db: sqlite3.Co
     cursor = db.cursor()
     cursor.execute("DELETE FROM api_keys WHERE user_id = ? AND exchange = 'binance'", (current_user["id"],))
     db.commit()
-    return {"status": "success", "message": "Corretora removida com sucesso!"}
+    return {"status": "success", "message": "Corretora desconectada com sucesso!"}
+
+# ROTA TEMPORÁRIA: Limpeza geral da tabela de corretoras (solicitada pelo usuário)
+@app.delete("/api/admin/clear_exchanges")
+def clear_all_exchanges(db: sqlite3.Connection = Depends(get_db)):
+    # Limpa do banco do Sniper
+    cursor = db.cursor()
+    cursor.execute("DELETE FROM api_keys")
+    db.commit()
+    
+    # Limpa do banco do Arbitrage Bot (trades.db) se existir
+    trades_db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'trades.db')
+    if os.path.exists(trades_db_path):
+        with sqlite3.connect(trades_db_path) as conn_trades:
+            cursor_trades = conn_trades.cursor()
+            try:
+                cursor_trades.execute("DELETE FROM api_keys")
+                conn_trades.commit()
+            except sqlite3.OperationalError:
+                pass # Tabela ainda não existe
+                
+    return {"status": "success", "message": "Tabela api_keys 100% zerada em todos os bancos."}
 
 @app.get("/api/analytics")
 def get_analytics(current_user = Depends(get_current_user)):
