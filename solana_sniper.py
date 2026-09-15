@@ -225,7 +225,17 @@ class SolanaSniper:
         # Aqui ficará a lógica de conexão com o WSS da Solana
         while True:
             for user_id, state in list(self.user_states.items()):
+                # Recarrega a configuração do SQLite a cada ciclo
+                self._load_user_config_from_db(user_id)
+                
                 if state["is_active"] and state["config"]["status"] == "watching":
+                    if not state.get("wallet"):
+                        await self.log_to_user(user_id, "ERROR", "Nenhuma carteira Solana (Burner Wallet) cadastrada.")
+                        state["is_active"] = False
+                        state["config"]["status"] = "idle"
+                        await self.broadcast_to_user(user_id, {"type": "config", **state["config"]})
+                        continue
+                        
                     try:
                         await self.log_to_user(user_id, "INFO", "🔎 Conectando ao WSS e escutando logs da Pump.fun...")
                         await asyncio.sleep(3)
