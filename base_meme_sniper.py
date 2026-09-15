@@ -817,25 +817,6 @@ class BaseMemeSniper:
                     highest_eth_value = entry_price_wei
                     continue
 
-                # Trailing Stop: -15%
-                if current_eth_value <= highest_eth_value * 0.85:
-                    logger.warning(f"📉 [TRAILING STOP] Preço caiu 15% do topo. Liquidando 100% de {target_token}...")
-                    await self.execute_sell(target_token, sell_percentage=100, user_id=user_id)
-                    
-                    realized_pnl_wei = current_eth_value - entry_price_wei
-                    realized_pnl_usd = (realized_pnl_wei / 1e18) * self.eth_usd_price
-                    state['daily_pnl_usd'] += realized_pnl_usd
-                    if realized_pnl_usd > 0: state['win_trades'] += 1
-                    logger.info(f"💸 PnL da operação (TS): ${realized_pnl_usd:.2f} USD")
-                    del state['open_positions'][target_token]
-                    await self.broadcast_ws({"type": "open_positions", "positions": list(state['open_positions'].values())}, target_user_id=user_id)
-                    
-                    if state['daily_pnl_usd'] <= -self.max_daily_loss_usd:
-                        state['is_active'] = False
-                        logger.error(f"🛑 [CIRCUIT BREAKER] Limite de perda diária atingido. Compras automáticas suspensas. (User {user_id})")
-                        asyncio.create_task(self.broadcast_ws({"type": "sniper_status", "is_active": state['is_active']}, target_user_id=user_id))
-                    break
-
                 # Stop-Loss: dinâmico
                 if current_eth_value <= sl_target:
                     logger.error(f"🛑 [STOP LOSS] Preço caiu para Stop Loss. Cortando perdas em {target_token}...")

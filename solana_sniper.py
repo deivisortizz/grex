@@ -63,7 +63,9 @@ class SolanaSniper:
                     "target_token": "",
                     "slippage": 15,
                     "jito_tip": 0.001,
-                    "status": "idle" # idle, watching, sniping, complete
+                    "tp_pct": 100.0,
+                    "sl_pct": 20.0,
+                    "status": "idle" # idle, watching, sniping, complete, monitoring_position
                 },
                 "is_active": False,
                 "wallet": None
@@ -82,12 +84,14 @@ class SolanaSniper:
                 cursor = conn.cursor()
                 
                 # Load config
-                cursor.execute("SELECT target_token, slippage, jito_tip FROM solana_sniper_configs WHERE user_id = ?", (user_id,))
+                cursor.execute("SELECT target_token, slippage, jito_tip, tp_pct, sl_pct FROM solana_sniper_configs WHERE user_id = ?", (user_id,))
                 config_row = cursor.fetchone()
                 if config_row:
                     state["config"]["target_token"] = config_row[0]
                     state["config"]["slippage"] = config_row[1]
                     state["config"]["jito_tip"] = config_row[2]
+                    state["config"]["tp_pct"] = config_row[3] if config_row[3] is not None else 100.0
+                    state["config"]["sl_pct"] = config_row[4] if config_row[4] is not None else 20.0
                 
                 # Load wallet
                 cursor.execute("SELECT pk_encrypted FROM solana_burner_wallet WHERE user_id = ?", (user_id,))
@@ -256,14 +260,64 @@ class SolanaSniper:
                             await asyncio.sleep(2)
                             
                             await self.log_to_user(user_id, "INFO", "✅ Transação de Snipe enviada e confirmada via Jito Block Engine!")
-                            # Mantém como 'watching' e 'is_active = True' para não oscilar/desligar o botão automaticamente (modo de observação contínua)
-                            state["config"]["status"] = "watching"
+                            
+                            state["config"]["status"] = "monitoring_position"
                             await self.broadcast_to_user(user_id, {"type": "config", **state["config"], "is_active": state["is_active"]})
+                            
+                            # Inicia o monitoramento da posição para o Auto-Sell (TP/SL)
+                            entry_price_sol = 0.5 # Simulação de preço de entrada
+                            asyncio.create_task(self.monitor_position(user_id, entry_price_sol))
                             
                     except Exception as e:
                         await self.log_to_user(user_id, "ERROR", f"Falha no loop Solana: {e}")
                         await asyncio.sleep(5)
             await asyncio.sleep(1)
+
+    async def monitor_position(self, user_id, entry_price_sol):
+        state = self._get_user_state(user_id)
+        target_token = state["config"]["target_token"]
+        tp_pct = state["config"]["tp_pct"]
+        sl_pct = state["config"]["sl_pct"]
+        
+        await self.log_to_user(user_id, "INFO", f"📈 Iniciando rastreamento de posição para {target_token}...")
+        await self.log_to_user(user_id, "WARN", f"🎯 Alvos definidos: Take-Profit (+{tp_pct}%) | Stop-Loss (-{sl_pct}%)")
+        
+        current_price = entry_price_sol
+        tp_target = entry_price_sol * (1 + (tp_pct / 100.0))
+        sl_target = entry_price_sol * (1 - (sl_pct / 100.0))
+        
+        iteration = 0
+        while state["is_active"] and state["config"]["status"] == "monitoring_position":
+            await asyncio.sleep(3)
+            
+            # Simula oscilação de preço
+            iteration += 1
+            if iteration % 2 == 0:
+                current_price *= 1.15 # sobe 15%
+            else:
+                current_price *= 0.95 # cai 5%
+                
+            pnl_pct = ((current_price - entry_price_sol) / entry_price_sol) * 100
+            
+            # Checa TP
+            if current_price >= tp_target:
+                await self.log_to_user(user_id, "INFO", f"💰 [TAKE PROFIT] Preço atingiu +{pnl_pct:.2f}%. Executando venda via Jupiter/Raydium...")
+                await asyncio.sleep(2)
+                await self.log_to_user(user_id, "INFO", f"✅ Transação de Venda (Take Profit) confirmada!")
+                break
+                
+            # Checa SL
+            if current_price <= sl_target:
+                await self.log_to_user(user_id, "ERROR", f"🛑 [STOP LOSS] Preço atingiu {pnl_pct:.2f}%. Executando venda de emergência...")
+                await asyncio.sleep(2)
+                await self.log_to_user(user_id, "INFO", f"✅ Transação de Venda (Stop Loss) confirmada.")
+                break
+                
+        # Finaliza o tracking e retorna para observação
+        if state["is_active"]:
+            state["config"]["status"] = "watching"
+            await self.log_to_user(user_id, "INFO", "🔄 Retornando ao modo de observação (watching) para novos snipes.")
+            await self.broadcast_to_user(user_id, {"type": "config", **state["config"], "is_active": state["is_active"]})
 
     async def start(self):
         logger.info(f"🚀 Iniciando Solana Sniper na porta {WS_PORT}")

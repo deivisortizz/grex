@@ -99,7 +99,9 @@ def init_db():
                 user_id INTEGER UNIQUE,
                 target_token TEXT,
                 slippage REAL,
-                jito_tip REAL
+                jito_tip REAL,
+                tp_pct REAL DEFAULT 100.0,
+                sl_pct REAL DEFAULT 20.0
             )
         ''')
         conn.commit()
@@ -176,6 +178,8 @@ class SolanaConfigReq(BaseModel):
     target_token: str
     slippage: float
     jito_tip: float
+    tp_pct: float
+    sl_pct: float
 
 class BinanceReq(BaseModel):
     api_key: str
@@ -383,11 +387,17 @@ def save_user_solana_wallet(req: SolanaWalletReq, current_user = Depends(get_cur
 @app.get("/api/user/solana_config")
 def get_user_solana_config(current_user = Depends(get_current_user), db: sqlite3.Connection = Depends(get_db)):
     cursor = db.cursor()
-    cursor.execute("SELECT target_token, slippage, jito_tip FROM solana_sniper_configs WHERE user_id = ?", (current_user["id"],))
+    cursor.execute("SELECT target_token, slippage, jito_tip, tp_pct, sl_pct FROM solana_sniper_configs WHERE user_id = ?", (current_user["id"],))
     row = cursor.fetchone()
     if not row:
-        return {"target_token": "", "slippage": 15.0, "jito_tip": 0.001}
-    return {"target_token": row["target_token"], "slippage": row["slippage"], "jito_tip": row["jito_tip"]}
+        return {"target_token": "", "slippage": 15.0, "jito_tip": 0.001, "tp_pct": 100.0, "sl_pct": 20.0}
+    return {
+        "target_token": row["target_token"], 
+        "slippage": row["slippage"], 
+        "jito_tip": row["jito_tip"],
+        "tp_pct": row["tp_pct"] if row["tp_pct"] is not None else 100.0,
+        "sl_pct": row["sl_pct"] if row["sl_pct"] is not None else 20.0
+    }
 
 @app.post("/api/user/solana_config")
 def save_user_solana_config(req: SolanaConfigReq, current_user = Depends(get_current_user), db: sqlite3.Connection = Depends(get_db)):
@@ -396,8 +406,8 @@ def save_user_solana_config(req: SolanaConfigReq, current_user = Depends(get_cur
         
     cursor = db.cursor()
     cursor.execute("DELETE FROM solana_sniper_configs WHERE user_id = ?", (current_user["id"],))
-    cursor.execute("INSERT INTO solana_sniper_configs (user_id, target_token, slippage, jito_tip) VALUES (?, ?, ?, ?)", 
-                   (current_user["id"], req.target_token, req.slippage, req.jito_tip))
+    cursor.execute("INSERT INTO solana_sniper_configs (user_id, target_token, slippage, jito_tip, tp_pct, sl_pct) VALUES (?, ?, ?, ?, ?, ?)", 
+                   (current_user["id"], req.target_token, req.slippage, req.jito_tip, req.tp_pct, req.sl_pct))
     db.commit()
     return {"status": "success", "message": "Configuração do Token salva com sucesso!"}
 

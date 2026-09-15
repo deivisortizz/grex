@@ -10,7 +10,9 @@ export default function SolanaSniperTab() {
   const [formData, setFormData] = useState({
     target_token: '',
     slippage: 15,
-    jito_tip: 0.001
+    jito_tip: 0.001,
+    tp_pct: 100,
+    sl_pct: 20
   });
 
   const [walletKey, setWalletKey] = useState('');
@@ -31,7 +33,9 @@ export default function SolanaSniperTab() {
           setFormData({
             target_token: configData.target_token || '',
             slippage: configData.slippage || 15,
-            jito_tip: configData.jito_tip || 0.001
+            jito_tip: configData.jito_tip || 0.001,
+            tp_pct: configData.tp_pct !== undefined ? configData.tp_pct : 100,
+            sl_pct: configData.sl_pct !== undefined ? configData.sl_pct : 20
           });
         }
         
@@ -89,7 +93,7 @@ export default function SolanaSniperTab() {
       });
       const data = await res.json();
       if (res.ok) {
-        setFormData({ target_token: '', slippage: 15, jito_tip: 0.001 });
+        setFormData({ target_token: '', slippage: 15, jito_tip: 0.001, tp_pct: 100, sl_pct: 20 });
         sendCommand('reset_config');
         alert(data.message);
       } else {
@@ -252,6 +256,28 @@ export default function SolanaSniperTab() {
                   className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-2.5 text-white focus:outline-none focus:border-violet-500 transition-colors"
                   value={formData.jito_tip}
                   onChange={(e) => setFormData({ ...formData, jito_tip: e.target.value })}
+                  disabled={isActive}
+                />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-semibold text-emerald-400 mb-1.5">Take-Profit (%)</label>
+                <input
+                  type="number"
+                  className="w-full bg-emerald-500/10 border border-emerald-500/30 rounded-xl px-4 py-2 text-emerald-400 font-mono text-sm focus:outline-none focus:border-emerald-500 transition-colors"
+                  value={formData.tp_pct}
+                  onChange={(e) => setFormData({ ...formData, tp_pct: Number(e.target.value) })}
+                  disabled={isActive}
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-rose-400 mb-1.5">Stop-Loss (%)</label>
+                <input
+                  type="number"
+                  className="w-full bg-rose-500/10 border border-rose-500/30 rounded-xl px-4 py-2 text-rose-400 font-mono text-sm focus:outline-none focus:border-rose-500 transition-colors"
+                  value={formData.sl_pct}
+                  onChange={(e) => setFormData({ ...formData, sl_pct: Number(e.target.value) })}
                   disabled={isActive}
                 />
               </div>
