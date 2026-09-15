@@ -86,6 +86,15 @@ def init_db():
                 user_id INTEGER
             )
         ''')
+        cursor_sol.execute('''
+            CREATE TABLE IF NOT EXISTS solana_sniper_configs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER UNIQUE,
+                target_token TEXT,
+                slippage REAL,
+                jito_tip REAL
+            )
+        ''')
         conn_sol.commit()
 
     # Inicializar trades.db (Bot de Arbitragem CCXT) também, caso server.py inicie antes
@@ -161,6 +170,14 @@ class UserConfigReq(BaseModel):
 class WalletReq(BaseModel):
     address: str
     private_key: str
+
+class SolanaWalletReq(BaseModel):
+    private_key: str
+
+class SolanaConfigReq(BaseModel):
+    target_token: str
+    slippage: float
+    jito_tip: float
 
 class BinanceReq(BaseModel):
     api_key: str
@@ -335,24 +352,64 @@ def get_user_solana_wallet(current_user = Depends(get_current_user), db_sol: sql
         return {"address": None}
     return {"address": row["address"]}
 
+@app.delete("/api/user/solana_wallet")
+def delete_user_solana_wallet(current_user = Depends(get_current_user), db_sol: sqlite3.Connection = Depends(get_solana_db)):
+    cursor = db_sol.cursor()
+    cursor.execute("DELETE FROM solana_burner_wallet WHERE user_id = ?", (current_user["id"],))
+    db_sol.commit()
+    return {"status": "success", "message": "Carteira Solana removida com sucesso!"}
+
 @app.post("/api/user/solana_wallet")
-def save_user_solana_wallet(req: WalletReq, current_user = Depends(get_current_user), db_sol: sqlite3.Connection = Depends(get_solana_db), db: sqlite3.Connection = Depends(get_db)):
-    # Validar se o endereço se parece com Base58 (alfanumérico sem O0Il, de 32-44 caracteres)
-    # Aqui faremos uma validação simples.
-    if not req.address or len(req.address) < 32 or len(req.address) > 44:
-        raise HTTPException(status_code=400, detail="Endereço Solana inválido. Use um formato Base58 válido.")
-        
+def save_user_solana_wallet(req: SolanaWalletReq, current_user = Depends(get_current_user), db_sol: sqlite3.Connection = Depends(get_solana_db), db: sqlite3.Connection = Depends(get_db)):
+    if not req.private_key or len(req.private_key) < 60:
+        raise HTTPException(status_code=400, detail="Chave privada Solana inválida. Use o formato Base58.")
+    
+    try:
+        from solders.keypair import Keypair
+        kp = Keypair.from_base58_string(req.private_key)
+        derived_address = str(kp.pubkey())
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Erro ao decodificar chave Solana: {e}")
+
     cursor = db_sol.cursor()
     cursor.execute("DELETE FROM solana_burner_wallet WHERE user_id = ?", (current_user["id"],))
     cursor.execute("INSERT INTO solana_burner_wallet (address, pk_encrypted, user_id) VALUES (?, ?, ?)", 
-                   (req.address, req.private_key, current_user["id"]))
+                   (derived_address, req.private_key, current_user["id"]))
     
-    # Ativa automaticamente o usuário para que o motor execute snipes
+    # Ativa automaticamente o usuário
     cursor_master = db.cursor()
     cursor_master.execute("UPDATE users SET is_active = 1 WHERE id = ?", (current_user["id"],))
     db.commit()
     db_sol.commit()
-    return {"status": "success", "message": "Carteira Solana salva com sucesso!"}
+    return {"status": "success", "message": f"Carteira Solana ({derived_address[:6]}...{derived_address[-4:]}) salva com sucesso!"}
+
+@app.get("/api/user/solana_config")
+def get_user_solana_config(current_user = Depends(get_current_user), db_sol: sqlite3.Connection = Depends(get_solana_db)):
+    cursor = db_sol.cursor()
+    cursor.execute("SELECT target_token, slippage, jito_tip FROM solana_sniper_configs WHERE user_id = ?", (current_user["id"],))
+    row = cursor.fetchone()
+    if not row:
+        return {"target_token": "", "slippage": 15.0, "jito_tip": 0.001}
+    return {"target_token": row["target_token"], "slippage": row["slippage"], "jito_tip": row["jito_tip"]}
+
+@app.post("/api/user/solana_config")
+def save_user_solana_config(req: SolanaConfigReq, current_user = Depends(get_current_user), db_sol: sqlite3.Connection = Depends(get_solana_db)):
+    if not req.target_token or len(req.target_token) < 32:
+        raise HTTPException(status_code=400, detail="Token Mint inválido.")
+        
+    cursor = db_sol.cursor()
+    cursor.execute("DELETE FROM solana_sniper_configs WHERE user_id = ?", (current_user["id"],))
+    cursor.execute("INSERT INTO solana_sniper_configs (user_id, target_token, slippage, jito_tip) VALUES (?, ?, ?, ?)", 
+                   (current_user["id"], req.target_token, req.slippage, req.jito_tip))
+    db_sol.commit()
+    return {"status": "success", "message": "Configuração do Token salva com sucesso!"}
+
+@app.delete("/api/user/solana_config")
+def delete_user_solana_config(current_user = Depends(get_current_user), db_sol: sqlite3.Connection = Depends(get_solana_db)):
+    cursor = db_sol.cursor()
+    cursor.execute("DELETE FROM solana_sniper_configs WHERE user_id = ?", (current_user["id"],))
+    db_sol.commit()
+    return {"status": "success", "message": "Configuração do Token apagada com sucesso!"}
 
 @app.delete("/api/user/solana_wallet")
 def delete_user_solana_wallet(current_user = Depends(get_current_user), db_sol: sqlite3.Connection = Depends(get_solana_db)):

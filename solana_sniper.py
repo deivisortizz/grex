@@ -4,155 +4,223 @@ import os
 import sqlite3
 import traceback
 import websockets
+import jwt
+import logging
+import sys
 from datetime import datetime
 from dotenv import load_dotenv
 
-# Dependências Solana (serão instaladas conforme requirements.txt)
+load_dotenv()
+
+# Configuração de Logs
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S',
+    handlers=[logging.StreamHandler(sys.stdout)]
+)
+logger = logging.getLogger('SolanaSniper')
+
+# Dependências Solana
 try:
     from solana.rpc.async_api import AsyncClient
     from solders.pubkey import Pubkey
     from solders.keypair import Keypair
 except ImportError:
-    print("Aviso: Bibliotecas solana/solders não instaladas localmente ainda. Execute pip install -r requirements.txt")
+    logger.warning("Aviso: Bibliotecas solana/solders não instaladas localmente ainda. Execute pip install -r requirements.txt")
 
-load_dotenv()
+WS_PORT = int(os.getenv("SOLANA_SNIPER_WS_PORT", "8767"))
+DATA_DIR = os.getenv("DATA_DIR", "/app/data")
 
-WS_PORT = 8767
-SOLANA_RPC_URL = os.getenv("SOLANA_RPC_URL", "https://api.mainnet-beta.solana.com")
-SOLANA_WSS_URL = os.getenv("SOLANA_WSS_URL", "wss://api.mainnet-beta.solana.com")
-DATA_DIR = os.getenv("DATA_DIR", "data")
+JWT_SECRET = os.getenv("JWT_SECRET", "multi-tenant-super-secret-fallback")
+JWT_ALGORITHM = "HS256"
 
 class SolanaSniper:
     def __init__(self):
         self.connected_clients = set()
-        self.config = {
-            "target_token": "",
-            "slippage": 15,
-            "jito_tip": 0.001,
-            "status": "idle" # idle, watching, sniping, complete
-        }
-        self.is_active = False
-        self.wallet = None
+        # Estado separado por user_id
+        # user_id -> { "config": { ... }, "is_active": bool, "wallet": str }
+        self.user_states = {}
 
-    def get_active_wallet(self):
+    def _get_user_state(self, user_id):
+        if user_id not in self.user_states:
+            self.user_states[user_id] = {
+                "config": {
+                    "target_token": "",
+                    "slippage": 15,
+                    "jito_tip": 0.001,
+                    "status": "idle" # idle, watching, sniping, complete
+                },
+                "is_active": False,
+                "wallet": None
+            }
+        return self.user_states[user_id]
+
+    def _load_user_config_from_db(self, user_id):
         db_path = os.path.join(DATA_DIR, 'solana_sniper.db')
         if not os.path.exists(db_path):
-            return None
+            return False
+            
+        state = self._get_user_state(user_id)
+        
         try:
             with sqlite3.connect(db_path) as conn:
                 cursor = conn.cursor()
-                cursor.execute("SELECT pk_encrypted FROM solana_burner_wallet LIMIT 1")
-                row = cursor.fetchone()
-                if row and row[0]:
-                    return row[0] # Neste MVP a chave está guardada direto
+                
+                # Load config
+                cursor.execute("SELECT target_token, slippage, jito_tip FROM solana_sniper_configs WHERE user_id = ?", (user_id,))
+                config_row = cursor.fetchone()
+                if config_row:
+                    state["config"]["target_token"] = config_row[0]
+                    state["config"]["slippage"] = config_row[1]
+                    state["config"]["jito_tip"] = config_row[2]
+                
+                # Load wallet
+                cursor.execute("SELECT pk_encrypted FROM solana_burner_wallet WHERE user_id = ?", (user_id,))
+                wallet_row = cursor.fetchone()
+                if wallet_row and wallet_row[0]:
+                    state["wallet"] = wallet_row[0]
+                else:
+                    state["wallet"] = None
+                    
+            return True
         except Exception as e:
-            print(f"Erro ao ler carteira: {e}")
-        return None
+            logger.error(f"Erro ao ler banco de dados para user {user_id}: {e}")
+            return False
 
-    async def broadcast(self, payload):
+    async def broadcast_to_user(self, user_id, payload):
         if not self.connected_clients:
             return
+            
         message = json.dumps(payload)
         to_remove = set()
         for client in self.connected_clients:
-            try:
-                await client.send(message)
-            except Exception:
-                to_remove.add(client)
+            if getattr(client, 'user_id', None) == user_id:
+                try:
+                    await client.send(message)
+                except Exception:
+                    to_remove.add(client)
         
         for client in to_remove:
             self.connected_clients.remove(client)
 
-    async def log_to_ui(self, level, message):
+    async def log_to_user(self, user_id, level, message):
         timestamp = datetime.now().strftime("%H:%M:%S")
-        await self.broadcast({
+        await self.broadcast_to_user(user_id, {
             "type": "log",
             "log": f"[{timestamp}] [{level}] {message}"
         })
-        print(f"[{timestamp}] [{level}] {message}")
+        logger.info(f"[User {user_id}] [{level}] {message}")
 
     async def ws_handler(self, websocket, path=None):
-        self.connected_clients.add(websocket)
+        logger.info("🔌 [WS] Nova conexão solicitada. Aguardando autenticação JWT...")
+        
         try:
+            try:
+                auth_message = await asyncio.wait_for(websocket.recv(), timeout=10.0)
+                auth_data = json.loads(auth_message)
+                
+                if auth_data.get("type") == "auth" and auth_data.get("token"):
+                    token = auth_data.get("token")
+                    try:
+                        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+                        websocket.user_id = payload.get("sub")
+                        logger.info(f"✅ [WS] Cliente autenticado (User ID: {websocket.user_id})")
+                    except Exception as e:
+                        logger.warning(f"❌ [WS] Erro JWT: {e}. Cliente desconectado.")
+                        return
+                else:
+                    logger.warning("⚠️ [WS] Primeira mensagem não foi de autenticação. Desconectando.")
+                    return
+            except asyncio.TimeoutError:
+                logger.info("ℹ️ [WS] Tempo esgotado para autenticação. Desconectando.")
+                return
+
+            self.connected_clients.add(websocket)
+            user_id = websocket.user_id
+            
+            # Carrega dados atualizados do banco ao conectar
+            self._load_user_config_from_db(user_id)
+            state = self._get_user_state(user_id)
+            
             # Envia configuração atual
             await websocket.send(json.dumps({
                 "type": "config",
-                **self.config
+                **state["config"]
             }))
             
             async for message in websocket:
                 data = json.loads(message)
                 
                 if data.get("type") == "start":
-                    self.config["target_token"] = data.get("target_token", "")
-                    self.config["slippage"] = data.get("slippage", 15)
-                    self.config["jito_tip"] = float(data.get("jito_tip", 0.001))
+                    # Recarrega banco para ter certeza que tem a config atualizada
+                    self._load_user_config_from_db(user_id)
+                    state = self._get_user_state(user_id)
                     
-                    if not self.config["target_token"]:
-                        await self.log_to_ui("ERROR", "Token alvo inválido.")
-                        continue
-                    
-                    wallet_key = self.get_active_wallet()
-                    if not wallet_key:
-                        await self.log_to_ui("ERROR", "Nenhuma carteira Solana (Burner Wallet) cadastrada.")
+                    if not state["config"]["target_token"]:
+                        await self.log_to_user(user_id, "ERROR", "Token alvo inválido ou não configurado no painel.")
                         continue
                         
-                    self.wallet = wallet_key
-                    self.config["status"] = "watching"
-                    self.is_active = True
-                    await self.log_to_ui("INFO", f"🚀 Iniciando monitoramento para: {self.config['target_token']}")
-                    await self.log_to_ui("INFO", f"⚙️ Estratégia: Pump.fun | Tip Jito: {self.config['jito_tip']} SOL")
-                    await self.broadcast({"type": "config", **self.config})
+                    if not state["wallet"]:
+                        await self.log_to_user(user_id, "ERROR", "Nenhuma carteira Solana (Burner Wallet) cadastrada.")
+                        continue
+                        
+                    state["config"]["status"] = "watching"
+                    state["is_active"] = True
+                    await self.log_to_user(user_id, "INFO", f"🚀 Iniciando monitoramento para: {state['config']['target_token']}")
+                    await self.log_to_user(user_id, "INFO", f"⚙️ Estratégia: Pump.fun | Tip Jito: {state['config']['jito_tip']} SOL")
+                    await self.broadcast_to_user(user_id, {"type": "config", **state["config"]})
                     
                 elif data.get("type") == "stop":
-                    self.is_active = False
-                    self.config["status"] = "idle"
-                    await self.log_to_ui("WARN", "⏸️ Monitoramento pausado pelo usuário.")
-                    await self.broadcast({"type": "config", **self.config})
+                    state = self._get_user_state(user_id)
+                    state["is_active"] = False
+                    state["config"]["status"] = "idle"
+                    await self.log_to_user(user_id, "WARN", "⏸️ Monitoramento pausado pelo usuário.")
+                    await self.broadcast_to_user(user_id, {"type": "config", **state["config"]})
 
         except websockets.exceptions.ConnectionClosed:
             pass
         except Exception as e:
-            print(f"WS Error: {e}")
+            logger.error(f"WS Error: {e}")
         finally:
-            self.connected_clients.remove(websocket)
+            if websocket in self.connected_clients:
+                self.connected_clients.remove(websocket)
 
     async def monitor_loop(self):
         # Aqui ficará a lógica de conexão com o WSS da Solana
-        # Como é um MVP / expansão, iniciaremos com um esqueleto assíncrono.
         while True:
-            if self.is_active and self.config["status"] == "watching":
-                try:
-                    await self.log_to_ui("INFO", "🔎 Conectando ao WSS e escutando logs da Pump.fun...")
-                    await asyncio.sleep(3)
-                    
-                    if self.is_active:
-                        await self.log_to_ui("INFO", "⚡ Evento de curva de adesão (Bonding Curve) detectado!")
-                        await asyncio.sleep(1)
-                        await self.log_to_ui("INFO", f"🔐 Validando Mint Authority & Freeze Authority do token...")
-                        await asyncio.sleep(2)
+            for user_id, state in list(self.user_states.items()):
+                if state["is_active"] and state["config"]["status"] == "watching":
+                    try:
+                        await self.log_to_user(user_id, "INFO", "🔎 Conectando ao WSS e escutando logs da Pump.fun...")
+                        await asyncio.sleep(3)
                         
-                        self.config["status"] = "sniping"
-                        await self.broadcast({"type": "config", **self.config})
-                        await self.log_to_ui("WARN", "🔥 Montando Atomic Transaction (Jito Bundle)...")
-                        await asyncio.sleep(1)
-                        
-                        await self.log_to_ui("INFO", f"💸 Anexando Priority Fee / Jito Tip: {self.config['jito_tip']} SOL")
-                        await asyncio.sleep(2)
-                        
-                        await self.log_to_ui("INFO", "✅ Transação de Snipe enviada e confirmada via Jito Block Engine!")
-                        self.is_active = False
-                        self.config["status"] = "complete"
-                        await self.broadcast({"type": "config", **self.config})
-                        
-                except Exception as e:
-                    await self.log_to_ui("ERROR", f"Falha no loop Solana: {e}")
-                    await asyncio.sleep(5)
-            else:
-                await asyncio.sleep(1)
+                        if state["is_active"]:
+                            await self.log_to_user(user_id, "INFO", "⚡ Evento de curva de adesão (Bonding Curve) detectado!")
+                            await asyncio.sleep(1)
+                            await self.log_to_user(user_id, "INFO", "🔐 Validando Mint Authority & Freeze Authority do token...")
+                            await asyncio.sleep(2)
+                            
+                            state["config"]["status"] = "sniping"
+                            await self.broadcast_to_user(user_id, {"type": "config", **state["config"]})
+                            await self.log_to_user(user_id, "WARN", "🔥 Montando Atomic Transaction (Jito Bundle)...")
+                            await asyncio.sleep(1)
+                            
+                            await self.log_to_user(user_id, "INFO", f"💸 Anexando Priority Fee / Jito Tip: {state['config']['jito_tip']} SOL")
+                            await asyncio.sleep(2)
+                            
+                            await self.log_to_user(user_id, "INFO", "✅ Transação de Snipe enviada e confirmada via Jito Block Engine!")
+                            state["is_active"] = False
+                            state["config"]["status"] = "complete"
+                            await self.broadcast_to_user(user_id, {"type": "config", **state["config"]})
+                            
+                    except Exception as e:
+                        await self.log_to_user(user_id, "ERROR", f"Falha no loop Solana: {e}")
+                        await asyncio.sleep(5)
+            await asyncio.sleep(1)
 
     async def start(self):
-        print(f"🚀 Iniciando Solana Sniper na porta {WS_PORT}")
+        logger.info(f"🚀 Iniciando Solana Sniper na porta {WS_PORT}")
         # Iniciar servidor WebSocket
         async with websockets.serve(self.ws_handler, "0.0.0.0", WS_PORT):
             await self.monitor_loop()

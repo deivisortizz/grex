@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useSolanaWebSocket } from '../../hooks/useSolanaWebSocket';
-import { Wifi, Power, Play, Pause, Save, Crosshair, Wallet } from 'lucide-react';
+import { Wifi, Power, Play, Pause, Save, Crosshair, Wallet, Trash2 } from 'lucide-react';
 
 export default function SolanaSniperTab() {
   const { status, config, logs, sendCommand } = useSolanaWebSocket();
@@ -16,11 +16,86 @@ export default function SolanaSniperTab() {
   const [walletKey, setWalletKey] = useState('');
   const [walletAddress, setWalletAddress] = useState(null);
 
+  // Fetch initial state
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        const token = localStorage.getItem('token');
+        const [configRes, walletRes] = await Promise.all([
+          fetch('/api/user/solana_config', { headers: { 'Authorization': `Bearer ${token}` } }),
+          fetch('/api/user/solana_wallet', { headers: { 'Authorization': `Bearer ${token}` } })
+        ]);
+        
+        if (configRes.ok) {
+          const configData = await configRes.json();
+          setFormData({
+            target_token: configData.target_token || '',
+            slippage: configData.slippage || 15,
+            jito_tip: configData.jito_tip || 0.001
+          });
+        }
+        
+        if (walletRes.ok) {
+          const walletData = await walletRes.json();
+          if (walletData.address) {
+            setWalletAddress(walletData.address);
+          }
+        }
+      } catch (err) {
+        console.error("Erro ao buscar dados iniciais:", err);
+      }
+    };
+    fetchData();
+  }, []);
+
   const toggleSniper = (activate) => {
     if (activate) {
-      sendCommand('start', formData);
+      sendCommand('start');
     } else {
       sendCommand('stop');
+    }
+  };
+
+  const handleSaveConfig = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      const res = await fetch('/api/user/solana_config', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify(formData)
+      });
+      const data = await res.json();
+      if (res.ok) {
+        alert(data.message);
+      } else {
+        alert(data.detail || "Erro ao salvar configuração.");
+      }
+    } catch (err) {
+      console.error(err);
+      alert("Erro de conexão.");
+    }
+  };
+
+  const handleDeleteConfig = async () => {
+    if (!window.confirm("Deseja apagar a configuração do alvo?")) return;
+    try {
+      const token = localStorage.getItem('token');
+      const res = await fetch('/api/user/solana_config', {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setFormData({ target_token: '', slippage: 15, jito_tip: 0.001 });
+        alert(data.message);
+      } else {
+        alert(data.detail || "Erro ao apagar configuração.");
+      }
+    } catch (err) {
+      console.error(err);
     }
   };
 
@@ -28,11 +103,49 @@ export default function SolanaSniperTab() {
     if (!walletKey) return;
     try {
       const token = localStorage.getItem('token');
-      // No backend, enviamos a chave privada, e ele tenta extrair o address. 
-      // Mas a rota espera address e private_key. Para Solana, a chave privada em Base58 pode ser usada pra derivar a pubkey.
-      // Neste MVP simples, enviaremos a chave. O backend deverá lidar, ou o usuário insere a pubkey tbm.
-      // O endpoint original da base espera req.address e req.private_key.
-      alert("A funcionalidade de salvar carteira será totalmente integrada na próxima fase do backend. A API requer o endereço da carteira gerado a partir da chave.");
+      const res = await fetch('/api/user/solana_wallet', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ private_key: walletKey })
+      });
+      const data = await res.json();
+      
+      if (res.ok) {
+        // Re-fetch to get the derived address
+        const walletRes = await fetch('/api/user/solana_wallet', { headers: { 'Authorization': `Bearer ${token}` } });
+        if (walletRes.ok) {
+          const walletData = await walletRes.json();
+          setWalletAddress(walletData.address);
+        }
+        setWalletKey('');
+        alert(data.message);
+      } else {
+        alert(data.detail || "Erro ao salvar carteira.");
+      }
+    } catch (err) {
+      console.error(err);
+      alert("Erro de conexão.");
+    }
+  };
+
+  const handleDeleteWallet = async () => {
+    if (!window.confirm("Atenção! Isso apagará sua Burner Wallet do banco de dados. Tem certeza?")) return;
+    try {
+      const token = localStorage.getItem('token');
+      const res = await fetch('/api/user/solana_wallet', {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setWalletAddress(null);
+        alert(data.message);
+      } else {
+        alert(data.detail || "Erro ao apagar carteira.");
+      }
     } catch (err) {
       console.error(err);
     }
@@ -141,6 +254,24 @@ export default function SolanaSniperTab() {
                 />
               </div>
             </div>
+            <div className="flex items-center gap-3 pt-2">
+              <button
+                onClick={handleSaveConfig}
+                disabled={isActive}
+                className="flex-1 bg-violet-600 hover:bg-violet-500 text-white font-bold py-2.5 rounded-xl transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
+              >
+                <Save size={18} />
+                Salvar Configuração
+              </button>
+              <button
+                onClick={handleDeleteConfig}
+                disabled={isActive || !formData.target_token}
+                className="px-4 py-2.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-500 border border-rose-500/20 rounded-xl transition-colors disabled:opacity-50 flex items-center justify-center"
+                title="Apagar Alvo"
+              >
+                <Trash2 size={18} />
+              </button>
+            </div>
           </div>
         </div>
 
@@ -152,8 +283,18 @@ export default function SolanaSniperTab() {
           </h3>
           <div className="space-y-4">
             {walletAddress ? (
-              <div className="p-4 bg-emerald-500/10 border border-emerald-500/30 rounded-xl text-emerald-400">
-                Carteira ativa: {walletAddress}
+              <div className="space-y-4">
+                <div className="p-4 bg-emerald-500/10 border border-emerald-500/30 rounded-xl text-emerald-400 font-mono text-sm break-all">
+                  Carteira ativa:<br />
+                  {walletAddress}
+                </div>
+                <button
+                  onClick={handleDeleteWallet}
+                  className="w-full bg-rose-500/10 hover:bg-rose-500/20 text-rose-500 border border-rose-500/20 font-bold py-2.5 rounded-xl transition-colors flex items-center justify-center gap-2"
+                >
+                  <Trash2 size={18} />
+                  Apagar Carteira (Reset)
+                </button>
               </div>
             ) : (
               <div>
@@ -167,8 +308,9 @@ export default function SolanaSniperTab() {
                 />
                 <button
                   onClick={handleSaveWallet}
-                  className="mt-4 w-full bg-violet-600 hover:bg-violet-500 text-white font-bold py-2.5 rounded-xl transition-colors"
+                  className="mt-4 w-full bg-violet-600 hover:bg-violet-500 text-white font-bold py-2.5 rounded-xl transition-colors flex items-center justify-center gap-2"
                 >
+                  <Save size={18} />
                   Salvar Carteira Solana
                 </button>
               </div>
