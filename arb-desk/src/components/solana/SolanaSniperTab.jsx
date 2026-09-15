@@ -5,7 +5,7 @@ import { Wifi, Power, Play, Pause, Save, Crosshair, Wallet, Trash2 } from 'lucid
 export default function SolanaSniperTab() {
   const { status, config, logs, sendCommand } = useSolanaWebSocket();
   const isConnected = status === 'Online';
-  const isActive = config.status === 'watching' || config.status === 'sniping';
+  const isActive = config.is_active === true || config.status === 'watching' || config.status === 'sniping';
 
   const [formData, setFormData] = useState({
     target_token: '',

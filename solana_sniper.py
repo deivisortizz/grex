@@ -165,7 +165,8 @@ class SolanaSniper:
             # Envia configuração atual
             await websocket.send(json.dumps({
                 "type": "config",
-                **state["config"]
+                **state["config"],
+                "is_active": state["is_active"]
             }))
             
             async for message in websocket:
@@ -188,14 +189,14 @@ class SolanaSniper:
                     state["is_active"] = True
                     await self.log_to_user(user_id, "INFO", f"🚀 Iniciando monitoramento para: {state['config']['target_token']}")
                     await self.log_to_user(user_id, "INFO", f"⚙️ Estratégia: Pump.fun | Tip Jito: {state['config']['jito_tip']} SOL")
-                    await self.broadcast_to_user(user_id, {"type": "config", **state["config"]})
+                    await self.broadcast_to_user(user_id, {"type": "config", **state["config"], "is_active": state["is_active"]})
                     
                 elif data.get("type") == "stop":
                     state = self._get_user_state(user_id)
                     state["is_active"] = False
                     state["config"]["status"] = "idle"
                     await self.log_to_user(user_id, "WARN", "⏸️ Monitoramento pausado pelo usuário.")
-                    await self.broadcast_to_user(user_id, {"type": "config", **state["config"]})
+                    await self.broadcast_to_user(user_id, {"type": "config", **state["config"], "is_active": state["is_active"]})
                     
                 elif data.get("type") == "reset_wallet":
                     state = self._get_user_state(user_id)
@@ -203,7 +204,7 @@ class SolanaSniper:
                     state["is_active"] = False
                     state["config"]["status"] = "idle"
                     await self.log_to_user(user_id, "WARN", "🗑️ Carteira Solana apagada. Monitoramento interrompido.")
-                    await self.broadcast_to_user(user_id, {"type": "config", **state["config"]})
+                    await self.broadcast_to_user(user_id, {"type": "config", **state["config"], "is_active": state["is_active"]})
                     
                 elif data.get("type") == "reset_config":
                     state = self._get_user_state(user_id)
@@ -211,7 +212,7 @@ class SolanaSniper:
                     state["is_active"] = False
                     state["config"]["status"] = "idle"
                     await self.log_to_user(user_id, "WARN", "🗑️ Token Alvo apagado. Monitoramento interrompido.")
-                    await self.broadcast_to_user(user_id, {"type": "config", **state["config"]})
+                    await self.broadcast_to_user(user_id, {"type": "config", **state["config"], "is_active": state["is_active"]})
 
         except websockets.exceptions.ConnectionClosed:
             pass
@@ -233,7 +234,7 @@ class SolanaSniper:
                         await self.log_to_user(user_id, "ERROR", "Nenhuma carteira Solana (Burner Wallet) cadastrada.")
                         state["is_active"] = False
                         state["config"]["status"] = "idle"
-                        await self.broadcast_to_user(user_id, {"type": "config", **state["config"]})
+                        await self.broadcast_to_user(user_id, {"type": "config", **state["config"], "is_active": state["is_active"]})
                         continue
                         
                     try:
@@ -247,7 +248,7 @@ class SolanaSniper:
                             await asyncio.sleep(2)
                             
                             state["config"]["status"] = "sniping"
-                            await self.broadcast_to_user(user_id, {"type": "config", **state["config"]})
+                            await self.broadcast_to_user(user_id, {"type": "config", **state["config"], "is_active": state["is_active"]})
                             await self.log_to_user(user_id, "WARN", "🔥 Montando Atomic Transaction (Jito Bundle)...")
                             await asyncio.sleep(1)
                             
@@ -255,9 +256,9 @@ class SolanaSniper:
                             await asyncio.sleep(2)
                             
                             await self.log_to_user(user_id, "INFO", "✅ Transação de Snipe enviada e confirmada via Jito Block Engine!")
-                            state["is_active"] = False
-                            state["config"]["status"] = "complete"
-                            await self.broadcast_to_user(user_id, {"type": "config", **state["config"]})
+                            # Mantém como 'watching' e 'is_active = True' para não oscilar/desligar o botão automaticamente (modo de observação contínua)
+                            state["config"]["status"] = "watching"
+                            await self.broadcast_to_user(user_id, {"type": "config", **state["config"], "is_active": state["is_active"]})
                             
                     except Exception as e:
                         await self.log_to_user(user_id, "ERROR", f"Falha no loop Solana: {e}")
