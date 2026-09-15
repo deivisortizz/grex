@@ -39,11 +39,8 @@ function App() {
   const wsRef = useRef(null)
 
   useEffect(() => {
-    const currentHost = window.location.hostname;
     const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    // Ignorando .env local hardcoded e forçando uso dinâmico para evitar ERR_CONNECTION_REFUSED
-    const wsUrl = `${wsProtocol}//${currentHost}:8765`;
-    
+    const wsUrl = `${wsProtocol}//${window.location.hostname}:8765`;
     const ws = new WebSocket(wsUrl)
     wsRef.current = ws
     let pingInterval;

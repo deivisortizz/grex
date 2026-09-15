@@ -36,10 +36,8 @@ export default function BurnerWalletConfig() {
   }, [])
 
   useEffect(() => {
-    // Configura a URL dinamicamente via window.location (ignora hardcoded .env)
-    const host = window.location.hostname;
     const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${wsProtocol}//${host}:8766`;
+    const wsUrl = `${wsProtocol}//${window.location.hostname}:8766`;
     const ws = new WebSocket(wsUrl)
     wsRef.current = ws
 
