@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Plus, Server, Key, Shield, EyeOff } from 'lucide-react'
 
 export default function ExchangesTab({ exchanges = [], sendCommand }) {
