@@ -22,7 +22,11 @@ function App() {
   const [isAdmin, setIsAdmin] = useState(localStorage.getItem('is_admin') === 'true')
   const [isAuthenticated, setIsAuthenticated] = useState(!!token)
 
-  const [activeTab, setActiveTab] = useState('Cotações')
+  const [activeTab, setActiveTab] = useState(localStorage.getItem('grex_activeTab') || 'Cotações')
+
+  useEffect(() => {
+    localStorage.setItem('grex_activeTab', activeTab)
+  }, [activeTab])
   const [marketData, setMarketData] = useState({})
   const [wsStatus, setWsStatus] = useState('Conectando...')
   const [ping, setPing] = useState(null)
