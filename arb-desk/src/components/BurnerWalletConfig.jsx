@@ -96,6 +96,7 @@ export default function BurnerWalletConfig() {
           }))
         }
         
+        setWalletStatus(address)
         setAddress('')
         setPrivateKey('')
         setSuccessMsg('Carteira criptografada e salva com sucesso!')

@@ -239,8 +239,9 @@ class BaseMemeSniper:
         self.init_db()
 
     def _get_user_state(self, user_id):
-        if user_id not in self.user_states:
-            self.user_states[user_id] = {
+        uid_str = str(user_id)
+        if uid_str not in self.user_states:
+            self.user_states[uid_str] = {
                 'wallet_address': None,
                 'private_key': None,
                 'config': {
@@ -255,7 +256,7 @@ class BaseMemeSniper:
                 'win_trades': 0,
                 'daily_pnl_usd': 0.0
             }
-        return self.user_states[user_id]
+        return self.user_states[uid_str]
     # ---------------------------------------------------------
     # Cofre (Fernet Vault) e DB Assíncrono
     # ---------------------------------------------------------
