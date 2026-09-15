@@ -262,6 +262,10 @@ def save_user_wallet(req: WalletReq, current_user = Depends(get_current_user), d
     cursor.execute("DELETE FROM burner_wallet WHERE user_id = ?", (current_user["id"],))
     cursor.execute("INSERT INTO burner_wallet (address, pk_encrypted, user_id) VALUES (?, ?, ?)", 
                    (req.address, req.private_key, current_user["id"]))
+    
+    # Ativa automaticamente o usuário para que o motor execute snipes
+    cursor.execute("UPDATE users SET is_active = 1 WHERE id = ?", (current_user["id"],))
+    
     db.commit()
     return {"status": "success", "message": "Carteira criptografada e salva com sucesso!"}
 

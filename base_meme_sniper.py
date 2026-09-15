@@ -369,6 +369,13 @@ class BaseMemeSniper:
                     'tp_pct': c['tp_pct'],
                     'sl_pct': c['sl_pct']
                 })
+                
+            # Carrega o status de ativação do Sniper
+            cursor.execute("SELECT id, is_active FROM users")
+            users = cursor.fetchall()
+            for u in users:
+                state = self._get_user_state(u['id'])
+                state['is_active'] = bool(u['is_active'])
 
     def _sync_save_wallet(self, address, private_key, user_id=None):
         enc_pk = self.encrypt_val(private_key)
@@ -1152,8 +1159,18 @@ class BaseMemeSniper:
                             # Reload entire data to refresh memory state safely
                             await self.load_all_data()
                             
-                            # Broadcast status atualizado para aquele usuário especificamente
                             state = self._get_user_state(user_id)
+                            # Ativa automaticamente o sniper ao cadastrar carteira válida
+                            state['is_active'] = True
+                            
+                            # Persiste no banco de dados
+                            db_path = os.path.join(DATA_DIR, 'sniper.db')
+                            with sqlite3.connect(db_path) as conn:
+                                cursor = conn.cursor()
+                                cursor.execute("UPDATE users SET is_active = 1 WHERE id = ?", (user_id,))
+                                conn.commit()
+                            
+                            # Broadcast status atualizado para aquele usuário especificamente
                             update_payload = {
                                 "type": "wallet_status",
                                 "wallet_address": state['wallet_address'],
