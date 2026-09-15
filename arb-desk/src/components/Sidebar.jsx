@@ -9,7 +9,8 @@ import {
   Waves,
   Flame,
   Shield,
-  User
+  User,
+  Zap
 } from 'lucide-react'
 
 const navItems = [
@@ -17,6 +18,7 @@ const navItems = [
   { name: 'Analytics', icon: Activity },
   { name: 'Oceano Azul', icon: Waves },
   { name: 'Base Sniper', icon: Flame, accent: 'orange' },
+  { name: 'Solana Sniper', icon: Zap, accent: 'violet' },
   { name: 'Histórico', icon: History },
   { name: 'Configurações', icon: Settings },
   { name: 'Corretoras', icon: Target },
@@ -55,6 +57,7 @@ export default function Sidebar({ wsStatus = 'Offline', ping, activeTab, setActi
           const Icon = item.icon
           const isOcean = item.name === 'Oceano Azul'
           const isSniper = item.name === 'Base Sniper'
+          const isSolana = item.name === 'Solana Sniper'
           const isAdminTab = item.name === 'Master Admin'
           return (
             <button
@@ -66,9 +69,11 @@ export default function Sidebar({ wsStatus = 'Offline', ping, activeTab, setActi
                     ? 'bg-blue-500/10 text-white border border-blue-500/30'
                     : isSniper
                       ? 'bg-orange-500/10 text-white border border-orange-500/30'
-                      : isAdminTab
-                        ? 'bg-purple-500/10 text-white border border-purple-500/30'
-                        : 'bg-zinc-800 text-white'
+                      : isSolana
+                        ? 'bg-violet-500/10 text-white border border-violet-500/30'
+                        : isAdminTab
+                          ? 'bg-purple-500/10 text-white border border-purple-500/30'
+                          : 'bg-zinc-800 text-white'
                   : 'text-zinc-400 hover:text-white hover:bg-zinc-800/50'
               }`}
             >
@@ -76,7 +81,7 @@ export default function Sidebar({ wsStatus = 'Offline', ping, activeTab, setActi
                 size={18}
                 className={
                   activeTab === item.name
-                    ? isOcean ? 'text-blue-400' : isSniper ? 'text-orange-400' : isAdminTab ? 'text-purple-400' : 'text-emerald-400'
+                    ? isOcean ? 'text-blue-400' : isSniper ? 'text-orange-400' : isSolana ? 'text-violet-400' : isAdminTab ? 'text-purple-400' : 'text-emerald-400'
                     : ''
                 }
               />
@@ -89,6 +94,11 @@ export default function Sidebar({ wsStatus = 'Offline', ping, activeTab, setActi
               {isSniper && (
                 <span className="ml-auto text-[9px] font-bold uppercase tracking-widest text-orange-500/70 bg-orange-500/10 px-1.5 py-0.5 rounded">
                   BASE
+                </span>
+              )}
+              {isSolana && (
+                <span className="ml-auto text-[9px] font-bold uppercase tracking-widest text-violet-500/70 bg-violet-500/10 px-1.5 py-0.5 rounded">
+                  SOL
                 </span>
               )}
               {isAdminTab && (

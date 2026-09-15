@@ -10,6 +10,7 @@ services:
     ports:
       - "8765:8765"
       - "8766:8766"
+      - "8767:8767"
       - "3000:3000"
     volumes:
       - grex_data:/app/data

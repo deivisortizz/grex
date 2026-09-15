@@ -74,6 +74,20 @@ def init_db():
         ''')
         conn.commit()
 
+    # Inicializar solana_sniper.db isolado
+    solana_db_path = os.path.join(DATA_DIR, 'solana_sniper.db')
+    with sqlite3.connect(solana_db_path, check_same_thread=False) as conn_sol:
+        cursor_sol = conn_sol.cursor()
+        cursor_sol.execute('''
+            CREATE TABLE IF NOT EXISTS solana_burner_wallet (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                address TEXT,
+                pk_encrypted TEXT,
+                user_id INTEGER
+            )
+        ''')
+        conn_sol.commit()
+
     # Inicializar trades.db (Bot de Arbitragem CCXT) também, caso server.py inicie antes
     trades_db_path = os.path.join(DATA_DIR, 'trades.db')
     with sqlite3.connect(trades_db_path, check_same_thread=False) as conn_trades:
@@ -105,6 +119,15 @@ init_db()
 
 def get_db():
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+def get_solana_db():
+    solana_db_path = os.path.join(DATA_DIR, 'solana_sniper.db')
+    conn = sqlite3.connect(solana_db_path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     try:
         yield conn
@@ -303,6 +326,42 @@ def delete_user_wallet(current_user = Depends(get_current_user), db: sqlite3.Con
     db.commit()
     return {"status": "success", "message": "Carteira removida com sucesso!"}
 
+@app.get("/api/user/solana_wallet")
+def get_user_solana_wallet(current_user = Depends(get_current_user), db_sol: sqlite3.Connection = Depends(get_solana_db)):
+    cursor = db_sol.cursor()
+    cursor.execute("SELECT address FROM solana_burner_wallet WHERE user_id = ?", (current_user["id"],))
+    row = cursor.fetchone()
+    if not row:
+        return {"address": None}
+    return {"address": row["address"]}
+
+@app.post("/api/user/solana_wallet")
+def save_user_solana_wallet(req: WalletReq, current_user = Depends(get_current_user), db_sol: sqlite3.Connection = Depends(get_solana_db), db: sqlite3.Connection = Depends(get_db)):
+    # Validar se o endereço se parece com Base58 (alfanumérico sem O0Il, de 32-44 caracteres)
+    # Aqui faremos uma validação simples.
+    if not req.address or len(req.address) < 32 or len(req.address) > 44:
+        raise HTTPException(status_code=400, detail="Endereço Solana inválido. Use um formato Base58 válido.")
+        
+    cursor = db_sol.cursor()
+    cursor.execute("DELETE FROM solana_burner_wallet WHERE user_id = ?", (current_user["id"],))
+    cursor.execute("INSERT INTO solana_burner_wallet (address, pk_encrypted, user_id) VALUES (?, ?, ?)", 
+                   (req.address, req.private_key, current_user["id"]))
+    
+    # Ativa automaticamente o usuário para que o motor execute snipes
+    cursor_master = db.cursor()
+    cursor_master.execute("UPDATE users SET is_active = 1 WHERE id = ?", (current_user["id"],))
+    db.commit()
+    db_sol.commit()
+    return {"status": "success", "message": "Carteira Solana salva com sucesso!"}
+
+@app.delete("/api/user/solana_wallet")
+def delete_user_solana_wallet(current_user = Depends(get_current_user), db_sol: sqlite3.Connection = Depends(get_solana_db)):
+    cursor = db_sol.cursor()
+    cursor.execute("DELETE FROM solana_burner_wallet WHERE user_id = ?", (current_user["id"],))
+    db_sol.commit()
+    return {"status": "success", "message": "Carteira Solana removida com sucesso!"}
+
+
 @app.get("/api/user/binance")
 def get_user_binance(current_user = Depends(get_current_user), db: sqlite3.Connection = Depends(get_db)):
     cursor = db.cursor()
@@ -363,6 +422,7 @@ def reset_system(current_user = Depends(get_current_admin)):
             os.path.join(base_dir, "data", "trades.db"),
             os.path.join(base_dir, "data", ".master.key"),
             os.path.join(base_dir, "data", "base_meme_sniper.db"),
+            os.path.join(base_dir, "data", "solana_sniper.db"),
             os.path.join(base_dir, "sniper.db")
         ]
         

@@ -10,9 +10,12 @@ RUN npm install
 # Copiar todo o código fonte
 COPY . .
 
-# Receber a variável de ambiente VITE_WS_URL no momento do build no Easypanel
+# Receber variáveis de ambiente no momento do build no Easypanel/Coolify
 ARG VITE_WS_URL
 ENV VITE_WS_URL=$VITE_WS_URL
+
+ARG VITE_SOLANA_WS_URL
+ENV VITE_SOLANA_WS_URL=$VITE_SOLANA_WS_URL
 
 # Executar o build otimizado (cria a pasta /dist)
 RUN npm run build
