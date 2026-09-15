@@ -13,7 +13,13 @@ export function useSolanaWebSocket() {
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
-    ws.onopen = () => setStatus('Online');
+    ws.onopen = () => {
+      setStatus('Online');
+      const token = localStorage.getItem('token');
+      if (token) {
+        ws.send(JSON.stringify({ type: 'auth', token }));
+      }
+    };
 
     ws.onmessage = (event) => {
       try {
