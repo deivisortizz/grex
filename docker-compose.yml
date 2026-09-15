@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   backend:
     build:
@@ -11,7 +9,7 @@ services:
       - "8765:8765"
       - "8766:8766"
       - "8767:8767"
-      - "3000:3000"
+      - "3001:3000" # <--- Alterado de 3000:3000 para 3001:3000
     volumes:
       - grex_data:/app/data
 
@@ -24,7 +22,7 @@ services:
     container_name: grex_frontend
     restart: unless-stopped
     ports:
-      - "3001:80"
+      - "3002:80" # <--- Opcional, alterado para evitar conflito se necessário
     depends_on:
       - backend
 
