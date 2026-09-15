@@ -14,7 +14,7 @@ export function useSolanaWebSocket() {
     wsRef.current = ws;
 
     ws.onopen = () => setStatus('Online');
-    
+
     ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
