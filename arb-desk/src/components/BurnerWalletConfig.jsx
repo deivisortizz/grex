@@ -37,7 +37,8 @@ export default function BurnerWalletConfig() {
 
   useEffect(() => {
     const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${wsProtocol}//${window.location.hostname}:8766`;
+    const dynamicWsUrl = `${wsProtocol}//${window.location.hostname}:8766`;
+    const wsUrl = import.meta.env.VITE_SNIPER_WS_URL || dynamicWsUrl;
     const ws = new WebSocket(wsUrl)
     wsRef.current = ws
 
