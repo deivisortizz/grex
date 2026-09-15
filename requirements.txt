@@ -9,6 +9,7 @@ fastapi
 uvicorn
 passlib[bcrypt]==1.7.4
 bcrypt==4.3.0
-PyJWTsolana>=0.33.0
+PyJWT
+solana>=0.33.0
 solders>=0.21.0
 base58
