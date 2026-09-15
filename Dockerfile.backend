@@ -16,6 +16,7 @@ RUN npm run build
 # ── 2️⃣ Backend Runtime (Python) ────────────────────────────────────────
 FROM python:3.11-slim AS backend-runtime
 WORKDIR /app
+ENV PYTHONUNBUFFERED=1
 
 # Instalar dependências de compilação do Python
 RUN apt-get update && apt-get install -y --no-install-recommends gcc && rm -rf /var/lib/apt/lists/*
@@ -34,7 +35,7 @@ COPY --from=frontend-builder /frontend/dist ./dist
 RUN chmod +x start.sh
 
 # Expor as portas usadas pelos WebSockets e HTTP
-EXPOSE 8765 8766 3000
+EXPOSE 8765 8766 8767 3000
 
 # Entrypoint único para gerenciar a stack completa via start.sh
 CMD ["/bin/bash", "start.sh"]
