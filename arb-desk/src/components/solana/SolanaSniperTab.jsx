@@ -90,6 +90,7 @@ export default function SolanaSniperTab() {
       const data = await res.json();
       if (res.ok) {
         setFormData({ target_token: '', slippage: 15, jito_tip: 0.001 });
+        sendCommand('reset_config');
         alert(data.message);
       } else {
         alert(data.detail || "Erro ao apagar configuração.");
@@ -142,6 +143,7 @@ export default function SolanaSniperTab() {
       const data = await res.json();
       if (res.ok) {
         setWalletAddress(null);
+        sendCommand('reset_wallet');
         alert(data.message);
       } else {
         alert(data.detail || "Erro ao apagar carteira.");

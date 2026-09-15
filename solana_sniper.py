@@ -124,7 +124,7 @@ class SolanaSniper:
                     token = auth_data.get("token")
                     try:
                         payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-                        websocket.user_id = payload.get("sub")
+                        websocket.user_id = int(payload.get("sub"))
                         logger.info(f"✅ [WS] Cliente autenticado (User ID: {websocket.user_id})")
                     except Exception as e:
                         logger.warning(f"❌ [WS] Erro JWT: {e}. Cliente desconectado.")
@@ -176,6 +176,22 @@ class SolanaSniper:
                     state["is_active"] = False
                     state["config"]["status"] = "idle"
                     await self.log_to_user(user_id, "WARN", "⏸️ Monitoramento pausado pelo usuário.")
+                    await self.broadcast_to_user(user_id, {"type": "config", **state["config"]})
+                    
+                elif data.get("type") == "reset_wallet":
+                    state = self._get_user_state(user_id)
+                    state["wallet"] = None
+                    state["is_active"] = False
+                    state["config"]["status"] = "idle"
+                    await self.log_to_user(user_id, "WARN", "🗑️ Carteira Solana apagada. Monitoramento interrompido.")
+                    await self.broadcast_to_user(user_id, {"type": "config", **state["config"]})
+                    
+                elif data.get("type") == "reset_config":
+                    state = self._get_user_state(user_id)
+                    state["config"]["target_token"] = ""
+                    state["is_active"] = False
+                    state["config"]["status"] = "idle"
+                    await self.log_to_user(user_id, "WARN", "🗑️ Token Alvo apagado. Monitoramento interrompido.")
                     await self.broadcast_to_user(user_id, {"type": "config", **state["config"]})
 
         except websockets.exceptions.ConnectionClosed:
