@@ -10,7 +10,7 @@ RUN npm ci --silent || npm install --silent
 # Copiar todo o código fonte do front-end
 COPY arb-desk/ ./
 
-# Build da aplicação React (Vite) → gera /frontend/dist
+# Build da aplicação React (Vite) → gera /fronteend/dist
 RUN npm run build
 
 # ── 2️⃣ Backend Runtime (Python) ────────────────────────────────────────
