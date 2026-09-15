@@ -4,9 +4,16 @@ import { Plus, Server, Key, Shield, EyeOff } from 'lucide-react'
 export default function ExchangesTab({ exchanges = [], sendCommand }) {
   const [localExchanges, setLocalExchanges] = useState(exchanges)
 
-  // Sincroniza estado local com prop externa quando vier do WebSocket (se vier)
+  // Sincroniza estado local com prop externa vindo do WebSocket
   useEffect(() => {
-    setLocalExchanges(exchanges)
+    setLocalExchanges(prev => {
+      // Se o servidor mandar vazio mas já temos itens locais, 
+      // ignoramos para evitar que um broadcast vazio limpe a tela inteira indevidamente.
+      if (exchanges.length === 0 && prev.length > 0) {
+        return prev;
+      }
+      return exchanges;
+    })
   }, [exchanges])
 
   const [formData, setFormData] = useState({
