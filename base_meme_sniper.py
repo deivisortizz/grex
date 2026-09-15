@@ -1160,6 +1160,23 @@ class BaseMemeSniper:
                             }
                             await self.broadcast_ws(update_payload, target_user_id=user_id)
 
+                    elif msg_type == "delete_wallet":
+                        user_id = getattr(websocket, 'user_id', None)
+                        if user_id:
+                            logger.info(f"🗑️ [WS] Removendo Burner Wallet da memória para User ID: {user_id}")
+                            state = self._get_user_state(user_id)
+                            state['wallet_address'] = None
+                            state['private_key'] = None
+                            
+                            # Opcional: Se já foi apagado do banco via REST,
+                            # apenas atualizamos e avisamos o frontend.
+                            update_payload = {
+                                "type": "wallet_status",
+                                "wallet_address": None,
+                                "is_active": state['is_active']
+                            }
+                            await self.broadcast_ws(update_payload, target_user_id=user_id)
+
                     elif msg_type == "toggle_sniper":
                         new_state = data.get("is_active")
                         user_id = getattr(websocket, 'user_id', None)

@@ -150,23 +150,32 @@ export default function BurnerWalletConfig() {
           </div>
           <button 
             onClick={async () => {
-              const token = localStorage.getItem('token');
-              try {
-                await fetch('/api/user/wallet', {
-                  method: 'DELETE',
-                  headers: { 'Authorization': `Bearer ${token}` }
-                });
-                setWalletStatus(null);
-                setAddress('');
-                setPrivateKey('');
-              } catch (e) {
-                console.error(e);
+              if (window.confirm("Tem certeza que deseja remover esta carteira do cofre? Esta ação não pode ser desfeita.")) {
+                const token = localStorage.getItem('token');
+                try {
+                  const res = await fetch('/api/user/wallet', {
+                    method: 'DELETE',
+                    headers: { 'Authorization': `Bearer ${token}` }
+                  });
+                  if (res.ok) {
+                    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+                      wsRef.current.send(JSON.stringify({ type: 'delete_wallet' }));
+                    }
+                    setWalletStatus(null);
+                    setAddress('');
+                    setPrivateKey('');
+                    setSuccessMsg('Carteira removida com sucesso!');
+                    setTimeout(() => setSuccessMsg(''), 5000);
+                  }
+                } catch (e) {
+                  console.error(e);
+                }
               }
             }}
-            className="p-2 bg-rose-500/20 text-rose-500 rounded-lg hover:bg-rose-500/30 transition-colors"
-            title="Deletar Carteira"
+            className="p-2 bg-rose-500/20 text-rose-500 rounded-lg hover:bg-rose-500/30 transition-colors font-semibold text-sm"
+            title="Remover Carteira"
           >
-            Deletar
+            Remover Carteira
           </button>
         </div>
       ) : (

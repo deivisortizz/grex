@@ -270,7 +270,7 @@ def delete_user_wallet(current_user = Depends(get_current_user), db: sqlite3.Con
     cursor = db.cursor()
     cursor.execute("DELETE FROM burner_wallet WHERE user_id = ?", (current_user["id"],))
     db.commit()
-    return {"msg": "Wallet removida com sucesso"}
+    return {"status": "success", "message": "Carteira removida com sucesso!"}
 
 @app.get("/api/user/binance")
 def get_user_binance(current_user = Depends(get_current_user), db: sqlite3.Connection = Depends(get_db)):
@@ -299,7 +299,7 @@ def delete_user_binance(current_user = Depends(get_current_user), db: sqlite3.Co
     cursor = db.cursor()
     cursor.execute("DELETE FROM api_keys WHERE user_id = ? AND exchange = 'binance'", (current_user["id"],))
     db.commit()
-    return {"msg": "Chaves da Binance removidas com sucesso"}
+    return {"status": "success", "message": "Corretora removida com sucesso!"}
 
 @app.get("/api/analytics")
 def get_analytics(current_user = Depends(get_current_user)):
