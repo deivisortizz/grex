@@ -7,9 +7,9 @@ export function useSolanaWebSocket() {
   const wsRef = useRef(null);
 
   const connect = useCallback(() => {
-    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const dynamicWsUrl = `${wsProtocol}//${window.location.hostname}:8767`;
-    const wsUrl = import.meta.env.VITE_SOLANA_WS_URL || dynamicWsUrl;
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const host = window.location.hostname;
+    const wsUrl = `${protocol}//${host}:8767`;
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
