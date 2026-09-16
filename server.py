@@ -412,13 +412,14 @@ def get_user_solana_config(current_user = Depends(get_current_user), db: sqlite3
 
 @app.post("/api/user/solana_config")
 def save_user_solana_config(req: SolanaConfigReq, current_user = Depends(get_current_user), db: sqlite3.Connection = Depends(get_db)):
-    if not req.target_token or len(req.target_token) < 32:
-        raise HTTPException(status_code=400, detail="Token Mint inválido.")
+    target = req.target_token or ""
+    if target and len(target) < 32:
+        raise HTTPException(status_code=400, detail="Token Mint inválido. A chave deve estar vazia para o Modo Global ou ter ao menos 32 caracteres.")
         
     cursor = db.cursor()
     cursor.execute("DELETE FROM solana_sniper_configs WHERE user_id = ?", (current_user["id"],))
     cursor.execute("INSERT INTO solana_sniper_configs (user_id, target_token, slippage, jito_tip, tp_pct, sl_pct) VALUES (?, ?, ?, ?, ?, ?)", 
-                   (current_user["id"], req.target_token, req.slippage, req.jito_tip, req.tp_pct, req.sl_pct))
+                   (current_user["id"], target, req.slippage, req.jito_tip, req.tp_pct, req.sl_pct))
     db.commit()
     return {"status": "success", "message": "Configuração do Token salva com sucesso!"}
 
