@@ -321,45 +321,47 @@ class SolanaSniper:
                     async for message in ws:
                         data = json.loads(message)
                         
-                        # Process each active user
-                        for user_id, state in list(self.user_states.items()):
-                            self._load_user_config_from_db(user_id)
+                        if "method" not in data or data["method"] != "logsNotification":
+                            continue
                             
+                        params = data.get("params", {})
+                        logs = params.get("result", {}).get("value", {}).get("logs", [])
+                        if not logs:
+                            continue
+                            
+                        logs_str = str(logs)
+                        
+                        # Process each active user using in-memory state
+                        for user_id, state in list(self.user_states.items()):
                             if state["is_active"] and state["config"]["status"] == "watching":
                                 if not state.get("wallet"):
-                                    self._load_user_config_from_db(user_id)
-                                    if not state.get("wallet"):
-                                        await self.log_to_user(user_id, "ERROR", "Nenhuma carteira Solana (Burner Wallet) cadastrada.")
-                                        state["is_active"] = False
-                                        state["config"]["status"] = "idle"
-                                        await self.broadcast_to_user(user_id, {"type": "config", **state["config"], "is_active": state["is_active"]})
-                                        continue
-                                        
+                                    await self.log_to_user(user_id, "ERROR", "Nenhuma carteira Solana (Burner Wallet) cadastrada.")
+                                    state["is_active"] = False
+                                    state["config"]["status"] = "idle"
+                                    await self.broadcast_to_user(user_id, {"type": "config", **state["config"], "is_active": state["is_active"]})
+                                    continue
+                                    
                                 target_token = state["config"].get("target_token")
                                 
-                                if "params" in data:
-                                    logs = data["params"].get("result", {}).get("value", {}).get("logs", [])
-                                    logs_str = str(logs)
-                                    
-                                    is_match = False
-                                    detected_token = target_token
-                                    
-                                    if target_token:
-                                        if target_token in logs_str:
-                                            is_match = True
-                                    else:
-                                        # Modo Global: Dispara se encontrar instrução de inicialização da Pump.fun
-                                        if "InitializeMint" in logs_str or len(logs) > 0:
-                                            is_match = True
-                                            detected_token = "GLOBAL_NEW_MINT_DETECTED"
-                                            
-                                    if is_match:
-                                        await self.log_to_user(user_id, "INFO", f"⚡ Evento detectado na Pump.fun para: {detected_token}!")
-                                        state["config"]["status"] = "sniping"
-                                        await self.broadcast_to_user(user_id, {"type": "config", **state["config"], "is_active": state["is_active"]})
+                                is_match = False
+                                detected_token = target_token
+                                
+                                if target_token:
+                                    if target_token in logs_str:
+                                        is_match = True
+                                else:
+                                    # Modo Global: Dispara se encontrar instrução de inicialização da Pump.fun
+                                    if "InitializeMint2" in logs_str or "InitializeMint" in logs_str:
+                                        is_match = True
+                                        detected_token = "GLOBAL_NEW_MINT_DETECTED"
                                         
-                                        # Executar o snipe real async
-                                        asyncio.create_task(self.handle_snipe_and_monitor(user_id, state, detected_token))
+                                if is_match:
+                                    await self.log_to_user(user_id, "INFO", f"⚡ Evento detectado na Pump.fun para: {detected_token}!")
+                                    state["config"]["status"] = "sniping"
+                                    await self.broadcast_to_user(user_id, {"type": "config", **state["config"], "is_active": state["is_active"]})
+                                    
+                                    # Executar o snipe real async
+                                    asyncio.create_task(self.handle_snipe_and_monitor(user_id, state, detected_token))
             except Exception as e:
                 logger.error(f"Erro no WSS Solana: {e}. Reconectando em 5s...")
                 await asyncio.sleep(5)
