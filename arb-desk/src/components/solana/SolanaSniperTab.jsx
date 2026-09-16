@@ -1,11 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { useSolanaWebSocket } from '../../hooks/useSolanaWebSocket';
-import { Wifi, Power, Play, Pause, Save, Crosshair, Wallet, Trash2 } from 'lucide-react';
+import { Save, Crosshair, Wallet, Trash2 } from 'lucide-react';
 
-export default function SolanaSniperTab() {
-  const { status, config, logs, sendCommand } = useSolanaWebSocket();
-  const isConnected = status === 'Online';
-  const isActive = config.is_active === true || config.status === 'watching' || config.status === 'sniping';
+export default function SolanaSniperTab({ isActive, sendCommand }) {
 
   const [formData, setFormData] = useState({
     target_token: '',
@@ -18,64 +14,70 @@ export default function SolanaSniperTab() {
   const [walletKey, setWalletKey] = useState('');
   const [walletAddress, setWalletAddress] = useState(null);
 
-  // Fetch initial state
   useEffect(() => {
-    const fetchData = async () => {
-      try {
-        const token = localStorage.getItem('token');
-        const [configRes, walletRes] = await Promise.all([
-          fetch('/api/user/solana_config', { headers: { 'Authorization': `Bearer ${token}` } }),
-          fetch('/api/user/solana_wallet', { headers: { 'Authorization': `Bearer ${token}` } })
-        ]);
-        
-        if (configRes.ok) {
-          const configData = await configRes.json();
-          setFormData({
-            target_token: configData.target_token || '',
-            slippage: configData.slippage || 15,
-            jito_tip: configData.jito_tip || 0.001,
-            tp_pct: configData.tp_pct !== undefined ? configData.tp_pct : 100,
-            sl_pct: configData.sl_pct !== undefined ? configData.sl_pct : 20
-          });
-        }
-        
-        if (walletRes.ok) {
-          const walletData = await walletRes.json();
-          if (walletData.address) {
-            setWalletAddress(walletData.address);
-          }
-        }
-      } catch (err) {
-        console.error("Erro ao buscar dados iniciais:", err);
-      }
-    };
-    fetchData();
+    fetchConfig();
+    fetchWallet();
   }, []);
 
-  const toggleSniper = (activate) => {
-    if (activate) {
-      sendCommand('start');
-    } else {
-      sendCommand('stop');
+  const fetchConfig = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      const res = await fetch('/api/user/solana_config', { headers: { 'Authorization': `Bearer ${token}` } });
+      if (res.ok) {
+        const data = await res.json();
+        setFormData({
+          target_token: data.target_token || '',
+          slippage: data.slippage || 15,
+          jito_tip: data.jito_tip || 0.001,
+          tp_pct: data.tp_pct || 100,
+          sl_pct: data.sl_pct || 20
+        });
+      }
+    } catch (err) {
+      console.error(err);
     }
   };
 
-  const handleSaveConfig = async () => {
+  const fetchWallet = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      const res = await fetch('/api/user/solana_wallet', { headers: { 'Authorization': `Bearer ${token}` } });
+      if (res.ok) {
+        const data = await res.json();
+        setWalletAddress(data.address);
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleConfigChange = (e) => {
+    const { name, value } = e.target;
+    setFormData(prev => ({
+      ...prev,
+      [name]: ['slippage', 'jito_tip', 'tp_pct', 'sl_pct'].includes(name) ? Number(value) : value
+    }));
+  };
+
+  const handleConfigSubmit = async (e) => {
+    e.preventDefault();
+    if (isActive) {
+      alert("⚠️ Pare o sniper antes de alterar a configuração!");
+      return;
+    }
     try {
       const token = localStorage.getItem('token');
       const res = await fetch('/api/user/solana_config', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
         body: JSON.stringify(formData)
       });
       const data = await res.json();
       if (res.ok) {
+        sendCommand('reset_config');
         alert(data.message);
       } else {
-        alert(data.detail || "Erro ao salvar configuração.");
+        alert(data.detail || "Erro ao salvar config.");
       }
     } catch (err) {
       console.error(err);
@@ -83,43 +85,22 @@ export default function SolanaSniperTab() {
     }
   };
 
-  const handleDeleteConfig = async () => {
-    if (!window.confirm("Deseja apagar a configuração do alvo?")) return;
-    try {
-      const token = localStorage.getItem('token');
-      const res = await fetch('/api/user/solana_config', {
-        method: 'DELETE',
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      const data = await res.json();
-      if (res.ok) {
-        setFormData({ target_token: '', slippage: 15, jito_tip: 0.001, tp_pct: 100, sl_pct: 20 });
-        sendCommand('reset_config');
-        alert(data.message);
-      } else {
-        alert(data.detail || "Erro ao apagar configuração.");
-      }
-    } catch (err) {
-      console.error(err);
+  const handleWalletSubmit = async (e) => {
+    e.preventDefault();
+    if (isActive) {
+      alert("⚠️ Pare o sniper antes de cadastrar carteira!");
+      return;
     }
-  };
-
-  const handleSaveWallet = async () => {
-    if (!walletKey) return;
     try {
       const token = localStorage.getItem('token');
       const res = await fetch('/api/user/solana_wallet', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
         body: JSON.stringify({ private_key: walletKey })
       });
       const data = await res.json();
       
       if (res.ok) {
-        // Re-fetch to get the derived address
         const walletRes = await fetch('/api/user/solana_wallet', { headers: { 'Authorization': `Bearer ${token}` } });
         if (walletRes.ok) {
           const walletData = await walletRes.json();
@@ -159,219 +140,140 @@ export default function SolanaSniperTab() {
 
   return (
     <div className="flex flex-col gap-6">
-      {/* Master Control Banner */}
-      <div className={`border rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 transition-all duration-300 ${
-        isActive
-          ? 'bg-zinc-900/90 border-emerald-500/30 shadow-[0_0_25px_rgba(16,185,129,0.08)]'
-          : 'bg-zinc-900/90 border-violet-500/30 shadow-[0_0_25px_rgba(139,92,246,0.08)]'
-      }`}>
-        <div className="flex items-center gap-3.5">
-          <div className={`w-12 h-12 rounded-xl flex items-center justify-center border transition-all shrink-0 ${
-            isActive
-              ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
-              : 'bg-violet-500/10 border-violet-500/30 text-violet-400'
-          }`}>
-            <Power size={24} className={isActive ? 'animate-pulse' : ''} />
-          </div>
+      {/* Configurações */}
+      <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6">
+        <h3 className="text-sm font-bold text-white mb-6 flex items-center gap-2">
+          <Crosshair size={18} className="text-violet-400" />
+          Alvo e Risco (Solana)
+        </h3>
+        
+        <form onSubmit={handleConfigSubmit} className="space-y-5">
           <div>
-            <div className="flex flex-wrap items-center gap-2.5">
-              <h2 className="text-lg font-bold text-white tracking-tight">Solana Sniper Engine</h2>
-              <span className={`px-2.5 py-0.5 text-xs font-bold font-mono rounded-full border flex items-center gap-1.5 ${
-                isActive
-                  ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-400'
-                  : 'bg-violet-500/15 border-violet-500/40 text-violet-400'
-              }`}>
-                <span className={`w-2 h-2 rounded-full ${isActive ? 'bg-emerald-400 animate-ping' : 'bg-violet-500'}`} />
-                {isActive ? 'EXECUÇÃO ATIVA' : 'SNIPER PAUSADO'}
-              </span>
-            </div>
-            <p className="text-xs text-zinc-400 mt-0.5">
-              {isActive
-                ? 'Monitorando criação de liquidez na Solana em tempo real (Pump.fun / Raydium).'
-                : 'Pausado: Insira o token alvo e ative o sniper.'}
-            </p>
+            <label className="block text-xs font-semibold text-zinc-400 mb-2">Target Token (Pump.fun Mint)</label>
+            <input
+              type="text"
+              name="target_token"
+              value={formData.target_token}
+              onChange={handleConfigChange}
+              disabled={isActive}
+              placeholder="Cole o endereço do contrato (Mint)"
+              className="w-full bg-black border border-zinc-800 rounded-xl px-4 py-3 text-sm text-zinc-200 focus:outline-none focus:border-violet-500/50 focus:ring-1 focus:ring-violet-500/50 disabled:opacity-50 font-mono transition-all"
+            />
           </div>
-        </div>
 
-        <div className="flex items-center gap-3 w-full sm:w-auto justify-end">
-          <button
-            onClick={() => toggleSniper(!isActive)}
-            disabled={!isConnected}
-            className={`w-full sm:w-auto px-6 py-3 rounded-xl font-bold text-sm flex items-center justify-center gap-2.5 transition-all shadow-lg cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
-              isActive
-                ? 'bg-rose-500/15 hover:bg-rose-500/25 text-rose-400 border border-rose-500/50 hover:border-rose-400 shadow-rose-500/10 active:scale-95'
-                : 'bg-violet-600 hover:bg-violet-500 text-white shadow-violet-500/20 active:scale-95'
-            }`}
-          >
-            {isActive ? (
-              <>
-                <Pause size={18} className="fill-current" />
-                <span>Pausar Sniper</span>
-              </>
-            ) : (
-              <>
-                <Play size={18} className="fill-current" />
-                <span>Ativar Sniper</span>
-              </>
-            )}
-          </button>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Configurações */}
-        <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6">
-          <h3 className="text-lg font-bold text-white mb-6 flex items-center gap-2">
-            <Crosshair size={20} className="text-violet-500" />
-            Configuração de Alvo (Solana)
-          </h3>
-          <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-bold text-zinc-400 mb-1.5">Endereço do Token (Mint)</label>
+              <label className="block text-xs font-semibold text-zinc-400 mb-2">Jito Tip (SOL)</label>
               <input
-                type="text"
-                className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-2.5 text-white focus:outline-none focus:border-violet-500 transition-colors font-mono text-sm"
-                placeholder="Ex: 7jnC... pump"
-                value={formData.target_token}
-                onChange={(e) => setFormData({ ...formData, target_token: e.target.value })}
+                type="number"
+                step="0.0001"
+                name="jito_tip"
+                value={formData.jito_tip}
+                onChange={handleConfigChange}
                 disabled={isActive}
+                className="w-full bg-black border border-zinc-800 rounded-xl px-4 py-3 text-sm text-zinc-200 focus:outline-none focus:border-violet-500/50 disabled:opacity-50 font-mono transition-all"
               />
             </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-bold text-zinc-400 mb-1.5">Slippage (%)</label>
-                <input
-                  type="number"
-                  className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-2.5 text-white focus:outline-none focus:border-violet-500 transition-colors"
-                  value={formData.slippage}
-                  onChange={(e) => setFormData({ ...formData, slippage: Number(e.target.value) })}
-                  disabled={isActive}
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-bold text-zinc-400 mb-1.5">Jito Tip (SOL)</label>
-                <input
-                  type="number"
-                  step="0.0001"
-                  className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-2.5 text-white focus:outline-none focus:border-violet-500 transition-colors"
-                  value={formData.jito_tip}
-                  onChange={(e) => setFormData({ ...formData, jito_tip: e.target.value })}
-                  disabled={isActive}
-                />
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-xs font-semibold text-emerald-400 mb-1.5">Take-Profit (%)</label>
-                <input
-                  type="number"
-                  className="w-full bg-emerald-500/10 border border-emerald-500/30 rounded-xl px-4 py-2 text-emerald-400 font-mono text-sm focus:outline-none focus:border-emerald-500 transition-colors"
-                  value={formData.tp_pct}
-                  onChange={(e) => setFormData({ ...formData, tp_pct: Number(e.target.value) })}
-                  disabled={isActive}
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-semibold text-rose-400 mb-1.5">Stop-Loss (%)</label>
-                <input
-                  type="number"
-                  className="w-full bg-rose-500/10 border border-rose-500/30 rounded-xl px-4 py-2 text-rose-400 font-mono text-sm focus:outline-none focus:border-rose-500 transition-colors"
-                  value={formData.sl_pct}
-                  onChange={(e) => setFormData({ ...formData, sl_pct: Number(e.target.value) })}
-                  disabled={isActive}
-                />
-              </div>
-            </div>
-            <div className="flex items-center gap-3 pt-2">
-              <button
-                onClick={handleSaveConfig}
+            <div>
+              <label className="block text-xs font-semibold text-zinc-400 mb-2">Slippage (%)</label>
+              <input
+                type="number"
+                step="0.1"
+                name="slippage"
+                value={formData.slippage}
+                onChange={handleConfigChange}
                 disabled={isActive}
-                className="flex-1 bg-violet-600 hover:bg-violet-500 text-white font-bold py-2.5 rounded-xl transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
-              >
-                <Save size={18} />
-                Salvar Configuração
-              </button>
-              <button
-                onClick={handleDeleteConfig}
-                disabled={isActive || !formData.target_token}
-                className="px-4 py-2.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-500 border border-rose-500/20 rounded-xl transition-colors disabled:opacity-50 flex items-center justify-center"
-                title="Apagar Alvo"
-              >
-                <Trash2 size={18} />
-              </button>
+                className="w-full bg-black border border-zinc-800 rounded-xl px-4 py-3 text-sm text-zinc-200 focus:outline-none focus:border-violet-500/50 disabled:opacity-50 font-mono transition-all"
+              />
             </div>
           </div>
-        </div>
 
-        {/* Burner Wallet */}
-        <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6">
-          <h3 className="text-lg font-bold text-white mb-6 flex items-center gap-2">
-            <Wallet size={20} className="text-violet-500" />
-            Solana Burner Wallet
-          </h3>
-          <div className="space-y-4">
-            {walletAddress ? (
-              <div className="space-y-4">
-                <div className="p-4 bg-emerald-500/10 border border-emerald-500/30 rounded-xl text-emerald-400 font-mono text-sm break-all">
-                  Carteira ativa:<br />
-                  {walletAddress}
-                </div>
-                <button
-                  onClick={handleDeleteWallet}
-                  className="w-full bg-rose-500/10 hover:bg-rose-500/20 text-rose-500 border border-rose-500/20 font-bold py-2.5 rounded-xl transition-colors flex items-center justify-center gap-2"
-                >
-                  <Trash2 size={18} />
-                  Apagar Carteira (Reset)
-                </button>
-              </div>
-            ) : (
-              <div>
-                <label className="block text-sm font-bold text-zinc-400 mb-1.5">Private Key (Base58)</label>
-                <input
-                  type="password"
-                  className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-2.5 text-white focus:outline-none focus:border-violet-500 transition-colors font-mono text-sm"
-                  placeholder="Insira sua chave privada Base58"
-                  value={walletKey}
-                  onChange={(e) => setWalletKey(e.target.value)}
-                />
-                <button
-                  onClick={handleSaveWallet}
-                  className="mt-4 w-full bg-violet-600 hover:bg-violet-500 text-white font-bold py-2.5 rounded-xl transition-colors flex items-center justify-center gap-2"
-                >
-                  <Save size={18} />
-                  Salvar Carteira Solana
-                </button>
-              </div>
-            )}
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-semibold text-zinc-400 mb-2">Take Profit (%)</label>
+              <input
+                type="number"
+                step="1"
+                name="tp_pct"
+                value={formData.tp_pct}
+                onChange={handleConfigChange}
+                disabled={isActive}
+                className="w-full bg-black border border-zinc-800 rounded-xl px-4 py-3 text-sm text-emerald-400 focus:outline-none focus:border-emerald-500/50 disabled:opacity-50 font-mono transition-all"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-zinc-400 mb-2">Stop Loss (%)</label>
+              <input
+                type="number"
+                step="1"
+                name="sl_pct"
+                value={formData.sl_pct}
+                onChange={handleConfigChange}
+                disabled={isActive}
+                className="w-full bg-black border border-zinc-800 rounded-xl px-4 py-3 text-sm text-rose-400 focus:outline-none focus:border-rose-500/50 disabled:opacity-50 font-mono transition-all"
+              />
+            </div>
           </div>
-        </div>
+
+          <button
+            type="submit"
+            disabled={isActive}
+            className="w-full bg-violet-600 hover:bg-violet-500 text-white font-bold py-3 px-4 rounded-xl text-sm flex items-center justify-center gap-2 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-violet-500/20 active:scale-95"
+          >
+            <Save size={16} />
+            Salvar Configurações
+          </button>
+        </form>
       </div>
 
-      {/* Terminal Logs */}
-      <div className="bg-[#0c0c0c] border border-zinc-800 rounded-2xl overflow-hidden flex flex-col h-[400px]">
-        <div className="bg-zinc-900 border-b border-zinc-800 px-4 py-3 flex items-center justify-between">
-          <h3 className="text-sm font-bold text-zinc-300 flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-violet-500 animate-pulse" />
-            Terminal Solana WSS
-          </h3>
-          <div className="flex items-center gap-2">
-            <span className={`text-xs font-bold px-2 py-1 rounded-md ${isConnected ? 'bg-emerald-500/20 text-emerald-400' : 'bg-rose-500/20 text-rose-400'}`}>
-              {status}
-            </span>
+      {/* Burner Wallet */}
+      <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 relative overflow-hidden group">
+        <div className="absolute top-0 right-0 w-32 h-32 bg-amber-500/5 rounded-full blur-3xl -mr-16 -mt-16 group-hover:bg-amber-500/10 transition-colors pointer-events-none" />
+        
+        <h3 className="text-sm font-bold text-white mb-6 flex items-center gap-2">
+          <Wallet size={18} className="text-amber-400" />
+          Burner Wallet (Solana)
+        </h3>
+
+        {walletAddress ? (
+          <div className="space-y-4">
+            <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl p-4">
+              <p className="text-xs font-semibold text-amber-500/80 mb-1">Carteira Ativa</p>
+              <p className="font-mono text-sm text-amber-400 break-all">{walletAddress}</p>
+            </div>
+            <button
+              onClick={handleDeleteWallet}
+              disabled={isActive}
+              className="w-full bg-black border border-rose-500/30 hover:bg-rose-500/10 hover:border-rose-500/50 text-rose-400 font-bold py-3 px-4 rounded-xl text-sm flex items-center justify-center gap-2 transition-all disabled:opacity-50 disabled:cursor-not-allowed group/btn"
+            >
+              <Trash2 size={16} className="group-hover/btn:scale-110 transition-transform" />
+              Apagar Carteira
+            </button>
           </div>
-        </div>
-        <div className="flex-1 p-4 font-mono text-xs overflow-y-auto space-y-1.5 flex flex-col-reverse">
-          {[...logs].reverse().map((log, i) => (
-            <div key={i} className="text-zinc-400 break-words border-b border-zinc-800/50 pb-1.5">
-              {log}
+        ) : (
+          <form onSubmit={handleWalletSubmit} className="space-y-4">
+            <div>
+              <label className="block text-xs font-semibold text-zinc-400 mb-2">Chave Privada (Base58 ou Array)</label>
+              <input
+                type="password"
+                value={walletKey}
+                onChange={(e) => setWalletKey(e.target.value)}
+                disabled={isActive}
+                placeholder="Insira a Private Key"
+                className="w-full bg-black border border-zinc-800 rounded-xl px-4 py-3 text-sm text-zinc-200 focus:outline-none focus:border-amber-500/50 focus:ring-1 focus:ring-amber-500/50 disabled:opacity-50 font-mono transition-all"
+                required
+              />
             </div>
-          ))}
-          {logs.length === 0 && (
-            <div className="text-zinc-600 text-center mt-10">
-              Aguardando conexão WSS da Solana...
-            </div>
-          )}
-        </div>
+            <button
+              type="submit"
+              disabled={isActive || !walletKey}
+              className="w-full bg-amber-500 hover:bg-amber-400 text-zinc-900 font-bold py-3 px-4 rounded-xl text-sm flex items-center justify-center gap-2 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-amber-500/20 active:scale-95"
+            >
+              <Save size={16} />
+              Vincular Carteira Segura
+            </button>
+          </form>
+        )}
       </div>
     </div>
   );

@@ -4,6 +4,8 @@ export function useSolanaWebSocket() {
   const [status, setStatus] = useState('Disconnected');
   const [config, setConfig] = useState({});
   const [logs, setLogs] = useState([]);
+  const [metrics, setMetrics] = useState({ total_trades: 0, win_trades: 0, daily_pnl_usd: 0 });
+  const [positions, setPositions] = useState([]);
   const wsRef = useRef(null);
 
   const connect = useCallback(() => {
@@ -28,6 +30,10 @@ export function useSolanaWebSocket() {
           setConfig(data);
         } else if (data.type === 'log') {
           setLogs(prev => [...prev, data.log].slice(-100)); // Keep last 100 logs
+        } else if (data.type === 'metrics_updated') {
+          setMetrics(data.metrics);
+        } else if (data.type === 'open_positions') {
+          setPositions(data.positions);
         }
       } catch (e) {
         console.error("Erro no WS Solana:", e);
@@ -60,5 +66,5 @@ export function useSolanaWebSocket() {
     }
   };
 
-  return { status, config, logs, sendCommand };
+  return { status, config, logs, metrics, positions, sendCommand };
 }

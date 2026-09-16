@@ -13,7 +13,7 @@ import Register from './components/Register'
 import SniperDashboard from './components/sniper/SniperDashboard'
 import AdminDashboard from './components/admin/AdminDashboard'
 import AccountSettings from './components/AccountSettings'
-import SolanaSniperTab from './components/solana/SolanaSniperTab'
+import SolanaDashboard from './components/solana/SolanaDashboard'
 
 function App() {
   // Controle do menu mobile
@@ -199,7 +199,7 @@ function App() {
         {activeTab === 'Corretoras' && <ExchangesTab exchanges={config.exchanges} sendCommand={sendCommand} />}
         {activeTab === 'Autobot' && <AutobotTab isSpatialActive={config.is_spatial_active} sendCommand={sendCommand} />}
         {activeTab === 'Base Sniper' && <SniperDashboard />}
-        {activeTab === 'Solana Sniper' && <SolanaSniperTab />}
+        {activeTab === 'Solana Sniper' && <SolanaDashboard />}
         {activeTab === 'Master Admin' && isAdmin && <AdminDashboard token={token} />}
         {activeTab === 'Minha Conta' && <AccountSettings token={token} />}
 
