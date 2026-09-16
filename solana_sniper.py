@@ -99,10 +99,6 @@ class SolanaSniper:
                     state["config"]["jito_tip"] = config_row[2]
                     state["config"]["tp_pct"] = config_row[3] if config_row[3] is not None else 100.0
                     state["config"]["sl_pct"] = config_row[4] if config_row[4] is not None else 20.0
-                    
-                    if not state["config"]["target_token"] and state["is_active"]:
-                        state["is_active"] = False
-                        state["config"]["status"] = "idle"
                 
                 # Load wallet
                 cursor.execute("SELECT pk_encrypted FROM solana_burner_wallet WHERE user_id = ?", (user_id,))
@@ -192,9 +188,7 @@ class SolanaSniper:
                     self._load_user_config_from_db(user_id)
                     state = self._get_user_state(user_id)
                     
-                    if not state["config"]["target_token"]:
-                        await self.log_to_user(user_id, "ERROR", "Token alvo inválido ou não configurado no painel.")
-                        continue
+                    target_token = state["config"].get("target_token")
                         
                     if not state["wallet"]:
                         await self.log_to_user(user_id, "ERROR", "Nenhuma carteira Solana (Burner Wallet) cadastrada.")
@@ -202,7 +196,12 @@ class SolanaSniper:
                         
                     state["config"]["status"] = "watching"
                     state["is_active"] = True
-                    await self.log_to_user(user_id, "INFO", f"🚀 Iniciando monitoramento para: {state['config']['target_token']}")
+                    
+                    if target_token:
+                        await self.log_to_user(user_id, "INFO", f"🚀 Iniciando monitoramento EXCLUSIVO para: {target_token}")
+                    else:
+                        await self.log_to_user(user_id, "WARN", "🌍 MODO GLOBAL: Escutando TODOS os novos lançamentos da Pump.fun!")
+                        
                     await self.log_to_user(user_id, "INFO", f"⚙️ Estratégia: Pump.fun | Tip Jito: {state['config']['jito_tip']} SOL")
                     await self.broadcast_to_user(user_id, {"type": "config", **state["config"], "is_active": state["is_active"]})
                     
@@ -338,18 +337,29 @@ class SolanaSniper:
                                         
                                 target_token = state["config"].get("target_token")
                                 
-                                # If target_token is set, look for it in logs to trigger snipe
-                                if target_token and "params" in data:
+                                if "params" in data:
                                     logs = data["params"].get("result", {}).get("value", {}).get("logs", [])
                                     logs_str = str(logs)
                                     
-                                    if target_token in logs_str:
-                                        await self.log_to_user(user_id, "INFO", f"⚡ Evento do token alvo {target_token} detectado na Pump.fun!")
+                                    is_match = False
+                                    detected_token = target_token
+                                    
+                                    if target_token:
+                                        if target_token in logs_str:
+                                            is_match = True
+                                    else:
+                                        # Modo Global: Dispara se encontrar instrução de inicialização da Pump.fun
+                                        if "InitializeMint" in logs_str or len(logs) > 0:
+                                            is_match = True
+                                            detected_token = "GLOBAL_NEW_MINT_DETECTED"
+                                            
+                                    if is_match:
+                                        await self.log_to_user(user_id, "INFO", f"⚡ Evento detectado na Pump.fun para: {detected_token}!")
                                         state["config"]["status"] = "sniping"
                                         await self.broadcast_to_user(user_id, {"type": "config", **state["config"], "is_active": state["is_active"]})
                                         
                                         # Executar o snipe real async
-                                        asyncio.create_task(self.handle_snipe_and_monitor(user_id, state, target_token))
+                                        asyncio.create_task(self.handle_snipe_and_monitor(user_id, state, detected_token))
             except Exception as e:
                 logger.error(f"Erro no WSS Solana: {e}. Reconectando em 5s...")
                 await asyncio.sleep(5)
