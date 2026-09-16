@@ -53,10 +53,32 @@ export default function SolanaSniperTab({ isActive, sendCommand }) {
 
   const handleConfigChange = (e) => {
     const { name, value } = e.target;
-    setFormData(prev => ({
-      ...prev,
-      [name]: ['slippage', 'jito_tip', 'tp_pct', 'sl_pct'].includes(name) ? Number(value) : value
-    }));
+    
+    if (['slippage', 'jito_tip', 'tp_pct', 'sl_pct'].includes(name)) {
+      // Aceita apenas números, ponto e vírgula, e substitui vírgula por ponto
+      let sanitized = value.replace(/,/g, '.').replace(/[^0-9.]/g, '');
+      
+      // Impede múltiplos pontos
+      const parts = sanitized.split('.');
+      if (parts.length > 2) {
+        sanitized = parts[0] + '.' + parts.slice(1).join('');
+      }
+      
+      setFormData(prev => ({
+        ...prev,
+        [name]: sanitized
+      }));
+    } else {
+      setFormData(prev => ({
+        ...prev,
+        [name]: value
+      }));
+    }
+  };
+
+  const parseNumber = (val) => {
+    const num = parseFloat(val);
+    return isNaN(num) ? 0 : num;
   };
 
   const handleConfigSubmit = async (e) => {
@@ -65,12 +87,20 @@ export default function SolanaSniperTab({ isActive, sendCommand }) {
       alert("⚠️ Pare o sniper antes de alterar a configuração!");
       return;
     }
+    
+    const payload = {
+      ...formData,
+      slippage: parseNumber(formData.slippage),
+      jito_tip: parseNumber(formData.jito_tip),
+      tp_pct: parseNumber(formData.tp_pct),
+      sl_pct: parseNumber(formData.sl_pct)
+    };
     try {
       const token = localStorage.getItem('token');
       const res = await fetch('/api/user/solana_config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify(formData)
+        body: JSON.stringify(payload)
       });
       const data = await res.json();
       if (res.ok) {
@@ -165,8 +195,8 @@ export default function SolanaSniperTab({ isActive, sendCommand }) {
             <div>
               <label className="block text-xs font-semibold text-zinc-400 mb-2">Jito Tip (SOL)</label>
               <input
-                type="number"
-                step="0.0001"
+                type="text"
+                inputMode="decimal"
                 name="jito_tip"
                 value={formData.jito_tip}
                 onChange={handleConfigChange}
@@ -177,8 +207,8 @@ export default function SolanaSniperTab({ isActive, sendCommand }) {
             <div>
               <label className="block text-xs font-semibold text-zinc-400 mb-2">Slippage (%)</label>
               <input
-                type="number"
-                step="0.1"
+                type="text"
+                inputMode="decimal"
                 name="slippage"
                 value={formData.slippage}
                 onChange={handleConfigChange}
@@ -192,8 +222,8 @@ export default function SolanaSniperTab({ isActive, sendCommand }) {
             <div>
               <label className="block text-xs font-semibold text-zinc-400 mb-2">Take Profit (%)</label>
               <input
-                type="number"
-                step="1"
+                type="text"
+                inputMode="decimal"
                 name="tp_pct"
                 value={formData.tp_pct}
                 onChange={handleConfigChange}
@@ -204,8 +234,8 @@ export default function SolanaSniperTab({ isActive, sendCommand }) {
             <div>
               <label className="block text-xs font-semibold text-zinc-400 mb-2">Stop Loss (%)</label>
               <input
-                type="number"
-                step="1"
+                type="text"
+                inputMode="decimal"
                 name="sl_pct"
                 value={formData.sl_pct}
                 onChange={handleConfigChange}
