@@ -905,7 +905,7 @@ class BaseMemeSniper:
             return
 
         if not state['private_key']:
-            logger.warning(f"⚠️ Ignorando snipe no token {target_token}. Burner wallet inexistente. (User {user_id})")
+            logger.debug(f"⚠️ Ignorando snipe no token {target_token}. Burner wallet inexistente. (User {user_id})")
             return
             
         logger.info(f"⚡ [EXECUÇÃO] Preparando roteamento e compra de {target_token} na Base... (User {user_id})")

@@ -142,6 +142,20 @@ class SolanaSniper:
         })
         logger.info(f"[User {user_id}] [{level}] {message}")
 
+    async def broadcast_metrics(self, user_id):
+        state = self._get_user_state(user_id)
+        metrics = {
+            "daily_pnl_usd": state.get("daily_pnl_usd", 0.0),
+            "total_trades": state.get("total_trades", 0),
+            "win_trades": state.get("win_trades", 0)
+        }
+        await self.broadcast_to_user(user_id, {"type": "metrics_updated", "metrics": metrics})
+
+    async def broadcast_positions(self, user_id):
+        state = self._get_user_state(user_id)
+        positions = list(state.get("open_positions", {}).values())
+        await self.broadcast_to_user(user_id, {"type": "open_positions", "positions": positions})
+
     async def ws_handler(self, websocket, path=None):
         logger.info("🔌 [WS] Nova conexão solicitada. Aguardando autenticação JWT...")
         
@@ -292,7 +306,7 @@ class SolanaSniper:
             await self.broadcast_to_user(user_id, {"type": "config", **state["config"], "is_active": state["is_active"]})
             # Start position monitoring
             entry_price_sol = 0.5 # Replace with actual logic when available
-            asyncio.create_task(self.monitor_position(user_id, entry_price_sol))
+            asyncio.create_task(self.monitor_position(user_id, entry_price_sol, token_mint=target_token))
         else:
             state["is_active"] = False
             state["config"]["status"] = "idle"
@@ -366,9 +380,9 @@ class SolanaSniper:
                 logger.error(f"Erro no WSS Solana: {e}. Reconectando em 5s...")
                 await asyncio.sleep(5)
 
-    async def monitor_position(self, user_id, entry_price_sol):
+    async def monitor_position(self, user_id, entry_price_sol, token_mint="TOKEN_DEFAULT"):
         state = self._get_user_state(user_id)
-        target_token = state["config"]["target_token"]
+        target_token = token_mint
         tp_pct = state["config"]["tp_pct"]
         sl_pct = state["config"]["sl_pct"]
         
@@ -379,7 +393,19 @@ class SolanaSniper:
         tp_target = entry_price_sol * (1 + (tp_pct / 100.0))
         sl_target = entry_price_sol * (1 - (sl_pct / 100.0))
         
+        # Registra posição inicial
+        state["open_positions"][target_token] = {
+            "token": target_token,
+            "entry_price": entry_price_sol,
+            "current_price": current_price,
+            "pnl_pct": 0.0
+        }
+        await self.broadcast_positions(user_id)
+        
         iteration = 0
+        profit_sol = 0
+        is_win = False
+        
         while state["is_active"] and state["config"]["status"] == "monitoring_position":
             await asyncio.sleep(3)
             
@@ -392,11 +418,19 @@ class SolanaSniper:
                 
             pnl_pct = ((current_price - entry_price_sol) / entry_price_sol) * 100
             
+            # Atualiza e envia posições ao vivo
+            if target_token in state["open_positions"]:
+                state["open_positions"][target_token]["current_price"] = current_price
+                state["open_positions"][target_token]["pnl_pct"] = pnl_pct
+                await self.broadcast_positions(user_id)
+            
             # Checa TP
             if current_price >= tp_target:
                 await self.log_to_user(user_id, "INFO", f"💰 [TAKE PROFIT] Preço atingiu +{pnl_pct:.2f}%. Executando venda via Jupiter/Raydium...")
                 await asyncio.sleep(2)
                 await self.log_to_user(user_id, "INFO", f"✅ Transação de Venda (Take Profit) confirmada!")
+                profit_sol = current_price - entry_price_sol
+                is_win = True
                 break
                 
             # Checa SL
@@ -404,7 +438,24 @@ class SolanaSniper:
                 await self.log_to_user(user_id, "ERROR", f"🛑 [STOP LOSS] Preço atingiu {pnl_pct:.2f}%. Executando venda de emergência...")
                 await asyncio.sleep(2)
                 await self.log_to_user(user_id, "INFO", f"✅ Transação de Venda (Stop Loss) confirmada.")
+                profit_sol = current_price - entry_price_sol
+                is_win = False
                 break
+                
+        # Calcula lucro em USD (assumindo compra hipotética de 1 SOL a $150)
+        sol_price_usd = 150.0
+        profit_usd = profit_sol * sol_price_usd
+        
+        state["total_trades"] += 1
+        if is_win:
+            state["win_trades"] += 1
+        state["daily_pnl_usd"] += profit_usd
+        
+        if target_token in state["open_positions"]:
+            del state["open_positions"][target_token]
+            
+        await self.broadcast_metrics(user_id)
+        await self.broadcast_positions(user_id)
                 
         # Finaliza o tracking e retorna para observação
         if state["is_active"]:
