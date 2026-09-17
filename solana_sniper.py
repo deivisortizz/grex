@@ -169,6 +169,76 @@ class SolanaSniper:
         await self.log_to_user(user_id, "WARN", "Tempo esgotado aguardando mudança de saldo. Usando último saldo lido.")
         return current_balance
 
+    async def _fetch_mint_from_tx(self, signature, session, rpc_url):
+        payload = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "getTransaction",
+            "params": [
+                signature,
+                {"encoding": "jsonParsed", "maxSupportedTransactionVersion": 0, "commitment": "confirmed"}
+            ]
+        }
+        
+        # Faz até 10 tentativas esperando a transação ficar disponível no RPC
+        for _ in range(10):
+            try:
+                async with session.post(rpc_url, json=payload) as resp:
+                    data = await resp.json()
+                    if "result" in data and data["result"]:
+                        meta = data["result"].get("meta", {})
+                        post_token_balances = meta.get("postTokenBalances", [])
+                        if post_token_balances:
+                            # O primeiro token balance criado na pump.fun é o próprio token
+                            return post_token_balances[0].get("mint")
+            except Exception:
+                pass
+            await asyncio.sleep(1)
+            
+        return None
+
+    async def _process_new_pool(self, signature):
+        rpc_url = os.getenv("SOLANA_RPC_URL", "https://mainnet.helius-rpc.com/?api-key=afef48e6-b88a-49e6-84c4-9b408156ee55")
+        async with aiohttp.ClientSession() as session:
+            mint = await self._fetch_mint_from_tx(signature, session, rpc_url)
+            if not mint:
+                return
+                
+        logger.info(f"⚡ [LIVE POOL] Novo token criado na Pump.fun: {mint}")
+        
+        # Broadcast para todos os clientes via WebSocket (Live Feed)
+        payload = {
+            "type": "new_pool",
+            "token": mint,
+            "timestamp": int(datetime.now().timestamp() * 1000)
+        }
+        msg = json.dumps(payload)
+        to_remove = set()
+        for client in self.connected_clients:
+            try:
+                await client.send(msg)
+            except Exception:
+                to_remove.add(client)
+        for client in to_remove:
+            self.connected_clients.remove(client)
+            
+        # Acionar Sniper Global
+        for user_id, state in list(self.user_states.items()):
+            if state["is_active"] and state["config"]["status"] == "watching":
+                target_token = state["config"].get("target_token")
+                if not target_token: # Modo Global
+                    if not state.get("wallet"):
+                        await self.log_to_user(user_id, "ERROR", "Nenhuma carteira Solana cadastrada. Desativando Sniper Global.")
+                        state["is_active"] = False
+                        state["config"]["status"] = "idle"
+                        await self.broadcast_to_user(user_id, {"type": "config", **state["config"], "is_active": state["is_active"]})
+                        continue
+                        
+                    await self.log_to_user(user_id, "INFO", f"🌍 Evento GLOBAL detectado na Pump.fun para: {mint}!")
+                    state["config"]["status"] = "sniping"
+                    await self.broadcast_to_user(user_id, {"type": "config", **state["config"], "is_active": state["is_active"]})
+                    asyncio.create_task(self.handle_snipe_and_monitor(user_id, state, mint))
+
     async def log_to_user(self, user_id, level, message):
         timestamp = datetime.now().strftime("%H:%M:%S")
         await self.broadcast_to_user(user_id, {
@@ -652,38 +722,30 @@ class SolanaSniper:
                             continue
                             
                         logs_str = str(logs)
+                        signature = params.get("result", {}).get("value", {}).get("signature")
                         
-                        # Process each active user using in-memory state
+                        # 1. Trata criação de novos pools (Live Feed e Global Sniping)
+                        if "InitializeMint2" in logs_str or "InitializeMint" in logs_str:
+                            if signature:
+                                asyncio.create_task(self._process_new_pool(signature))
+                        
+                        # 2. Processa usuários que estão no modo Target (Alvo Específico)
                         for user_id, state in list(self.user_states.items()):
                             if state["is_active"] and state["config"]["status"] == "watching":
-                                if not state.get("wallet"):
-                                    await self.log_to_user(user_id, "ERROR", "Nenhuma carteira Solana (Burner Wallet) cadastrada.")
-                                    state["is_active"] = False
-                                    state["config"]["status"] = "idle"
-                                    await self.broadcast_to_user(user_id, {"type": "config", **state["config"], "is_active": state["is_active"]})
-                                    continue
-                                    
                                 target_token = state["config"].get("target_token")
                                 
-                                is_match = False
-                                detected_token = target_token
-                                
-                                if target_token:
-                                    if target_token in logs_str:
-                                        is_match = True
-                                else:
-                                    # Modo Global: Dispara se encontrar instrução de inicialização da Pump.fun
-                                    if "InitializeMint2" in logs_str or "InitializeMint" in logs_str:
-                                        is_match = True
-                                        detected_token = "GLOBAL_NEW_MINT_DETECTED"
+                                if target_token and target_token in logs_str:
+                                    if not state.get("wallet"):
+                                        await self.log_to_user(user_id, "ERROR", "Nenhuma carteira Solana cadastrada.")
+                                        state["is_active"] = False
+                                        state["config"]["status"] = "idle"
+                                        await self.broadcast_to_user(user_id, {"type": "config", **state["config"], "is_active": state["is_active"]})
+                                        continue
                                         
-                                if is_match:
-                                    await self.log_to_user(user_id, "INFO", f"⚡ Evento detectado na Pump.fun para: {detected_token}!")
+                                    await self.log_to_user(user_id, "INFO", f"⚡ Evento ALVO detectado na Pump.fun para: {target_token}!")
                                     state["config"]["status"] = "sniping"
                                     await self.broadcast_to_user(user_id, {"type": "config", **state["config"], "is_active": state["is_active"]})
-                                    
-                                    # Executar o snipe real async
-                                    asyncio.create_task(self.handle_snipe_and_monitor(user_id, state, detected_token))
+                                    asyncio.create_task(self.handle_snipe_and_monitor(user_id, state, target_token))
             except Exception as e:
                 logger.error(f"Erro no WSS Solana: {e}. Reconectando em 5s...")
                 await asyncio.sleep(5)
