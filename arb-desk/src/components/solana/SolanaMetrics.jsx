@@ -2,8 +2,7 @@ import React from 'react';
 import { TrendingUp, Target, Activity } from 'lucide-react';
 
 export default function SolanaMetrics({ metrics }) {
-  const { daily_pnl_usd = 0, total_trades = 0, win_trades = 0 } = metrics || {};
-  const winRate = total_trades > 0 ? ((win_trades / total_trades) * 100).toFixed(1) : 0;
+  const { daily_pnl_usd = 0, total_trades = 0, wins = 0, losses = 0, win_rate = 0 } = metrics || {};
   const pnlColor = daily_pnl_usd >= 0 ? 'text-emerald-400' : 'text-rose-400';
 
   return (
@@ -35,7 +34,7 @@ export default function SolanaMetrics({ metrics }) {
         </div>
         <div className="mt-4">
           <div className="text-3xl font-bold font-mono tracking-tight text-white">
-            {winRate}%
+            {win_rate}%
           </div>
         </div>
       </div>
@@ -54,7 +53,7 @@ export default function SolanaMetrics({ metrics }) {
             {total_trades}
           </div>
           <div className="text-sm text-zinc-500 font-mono mb-1">
-            <span className="text-emerald-400">{win_trades} W</span> / <span className="text-rose-400">{total_trades - win_trades} L</span>
+            <span className="text-emerald-400">{wins} W</span> / <span className="text-rose-400">{losses} L</span>
           </div>
         </div>
       </div>

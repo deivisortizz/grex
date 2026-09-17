@@ -17,6 +17,30 @@ export default function SolanaDashboard() {
     }
   };
 
+  const forceBuy = () => {
+    let token = config.target_token;
+    if (!token) {
+      token = window.prompt("Nenhum token alvo configurado.\nInsira o endereço (Mint) do token que deseja comprar AGORA:");
+      if (!token) return;
+    }
+    const confirmBuy = window.confirm(`ATENÇÃO: Você está prestes a forçar uma COMPRA REAL na Solana para o token:\n${token}\n\nDeseja continuar?`);
+    if (confirmBuy) {
+      sendCommand('force_buy', { token });
+    }
+  };
+
+  const forceSell = () => {
+    let token = config.target_token;
+    if (!token) {
+      token = window.prompt("Nenhum token alvo configurado.\nInsira o endereço (Mint) do token que deseja VENDER AGORA (Dump 100%):");
+      if (!token) return;
+    }
+    const confirmSell = window.confirm(`🚨 PANIC SELL 🚨\n\nVocê está prestes a fazer o DUMP (Vender 100%) da sua posição no token:\n${token}\n\nDeseja confirmar a venda imediata na rede?`);
+    if (confirmSell) {
+      sendCommand('force_sell', { token });
+    }
+  };
+
   return (
     <div className="flex flex-col gap-6 w-full max-w-7xl mx-auto">
       
@@ -54,7 +78,21 @@ export default function SolanaDashboard() {
           </div>
         </div>
 
-        <div className="flex items-center gap-3 w-full sm:w-auto justify-end">
+        <div className="flex flex-col sm:flex-row items-center gap-3 w-full sm:w-auto justify-end">
+          <button
+            onClick={forceBuy}
+            className="w-full sm:w-auto px-5 py-3 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all shadow-lg cursor-pointer bg-amber-500 hover:bg-amber-400 text-zinc-900 shadow-amber-500/20 active:scale-95"
+          >
+            ⚡ Forçar Compra
+          </button>
+
+          <button
+            onClick={forceSell}
+            className="w-full sm:w-auto px-5 py-3 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all shadow-lg cursor-pointer bg-rose-600 hover:bg-rose-500 text-white shadow-rose-500/20 active:scale-95"
+          >
+            🔴 Forçar Venda
+          </button>
+
           <button
             onClick={() => toggleSniper(!isActive)}
             className={`w-full sm:w-auto px-6 py-3 rounded-xl font-bold text-sm flex items-center justify-center gap-2.5 transition-all shadow-lg cursor-pointer ${

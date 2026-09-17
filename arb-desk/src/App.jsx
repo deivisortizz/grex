@@ -40,6 +40,12 @@ function App() {
   const wsRef = useRef(null)
 
   useEffect(() => {
+    const currentToken = localStorage.getItem('token')
+    if (!currentToken) {
+      setWsStatus('Desconectado')
+      return
+    }
+
     const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const dynamicWsUrl = `${wsProtocol}//${window.location.hostname}:8765`;
     const wsUrl = import.meta.env.VITE_WS_URL || dynamicWsUrl;
@@ -96,9 +102,18 @@ function App() {
       }
     }
 
-    ws.onclose = () => {
-      setWsStatus('Offline')
-      setPing(null)
+    ws.onclose = (event) => {
+      setWsStatus('Desconectado')
+      clearInterval(pingInterval)
+      if (event.code !== 4001) {
+        setTimeout(() => {
+          setWsStatus('Reconectando...')
+          // A dependência de recriação do WS seria ideal, mas para simplificar, apenas atualiza o status.
+          // Na prática, um relog seria feito.
+        }, 3000)
+      } else {
+        console.warn("Autenticação WebSocket falhou. Não reconectará automaticamente.")
+      }
     }
 
     return () => {

@@ -115,6 +115,22 @@ def init_db():
         except sqlite3.OperationalError:
             pass # Coluna já existe
 
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS solana_sniper_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                token_mint TEXT,
+                sol_spent REAL,
+                sol_received REAL,
+                jito_tip_buy REAL,
+                jito_tip_sell REAL,
+                net_pnl_sol REAL,
+                net_pnl_usd REAL,
+                is_win BOOLEAN,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+
         conn.commit()
 
     # Inicializar trades.db (Bot de Arbitragem CCXT) também, caso server.py inicie antes

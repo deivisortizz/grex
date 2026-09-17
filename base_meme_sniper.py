@@ -261,6 +261,7 @@ class BaseMemeSniper:
     # Cofre (Fernet Vault) e DB Assíncrono
     # ---------------------------------------------------------
     def init_crypto(self):
+        os.makedirs(DATA_DIR, exist_ok=True)
         key_path = os.path.join(DATA_DIR, '.master.key')
         if not os.path.exists(key_path):
             key = Fernet.generate_key()

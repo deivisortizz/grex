@@ -12,6 +12,13 @@ export function useSniperWebSocket() {
   const wsRef = useRef(null)
 
   const connect = useCallback(() => {
+    const token = localStorage.getItem('token');
+    if (!token) {
+      console.warn("Nenhum token encontrado. WS do Sniper não será conectado.");
+      setIsConnected(false);
+      return;
+    }
+
     const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const dynamicWsUrl = `${wsProtocol}//${window.location.hostname}:8766`;
     const wsUrl = import.meta.env.VITE_SNIPER_WS_URL || dynamicWsUrl;
@@ -20,6 +27,7 @@ export function useSniperWebSocket() {
 
     ws.onopen = () => {
       setIsConnected(true)
+      ws.send(JSON.stringify({ type: 'auth', token }))
     }
 
     ws.onmessage = (event) => {
@@ -85,10 +93,13 @@ export function useSniperWebSocket() {
       }
     }
 
-    ws.onclose = () => {
+    ws.onclose = (event) => {
       setIsConnected(false)
-      // Tenta reconectar após 3s
-      setTimeout(connect, 3000)
+      if (event.code !== 4001) {
+        setTimeout(connect, 3000)
+      } else {
+        console.warn("Conexão do Sniper recusada por falha de autenticação (4001). Parando tentativas.")
+      }
     }
 
     ws.onerror = (err) => {
