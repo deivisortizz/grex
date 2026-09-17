@@ -1,9 +1,7 @@
 import React from 'react'
 import { Activity, Copy, ExternalLink, Zap } from 'lucide-react'
-import { useSniperContext } from '../../context/SniperContext'
 
-export default function PoolFeedTable() {
-  const { pools, sendCommand } = useSniperContext()
+export default function PoolFeedTable({ pools = [], sendCommand, networkName = "Base" }) {
 
   const copyToClipboard = (text) => {
     navigator.clipboard.writeText(text)
@@ -42,16 +40,16 @@ export default function PoolFeedTable() {
             <tr>
               <th className="px-5 py-3 font-semibold text-xs uppercase tracking-wider">Time</th>
               <th className="px-5 py-3 font-semibold text-xs uppercase tracking-wider">Token</th>
-              <th className="px-5 py-3 font-semibold text-xs uppercase tracking-wider">Pair</th>
+              {networkName === 'Base' && <th className="px-5 py-3 font-semibold text-xs uppercase tracking-wider">Pair</th>}
               <th className="px-5 py-3 font-semibold text-xs uppercase tracking-wider text-right">Action</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-zinc-800/50">
             {pools.length === 0 ? (
               <tr>
-                <td colSpan="4" className="px-5 py-10 text-center text-zinc-500">
+                <td colSpan={networkName === 'Base' ? "4" : "3"} className="px-5 py-10 text-center text-zinc-500">
                   <Activity className="mx-auto h-8 w-8 mb-3 opacity-20" />
-                  <p>Escutando a mempool da rede Base...</p>
+                  <p>Escutando a mempool da rede {networkName}...</p>
                 </td>
               </tr>
             ) : (
@@ -71,16 +69,17 @@ export default function PoolFeedTable() {
                         <Copy size={14} />
                       </button>
                       <a 
-                        href={`https://basescan.org/token/${pool.token}`} 
+                        href={networkName === 'Base' ? `https://basescan.org/token/${pool.token}` : `https://solscan.io/token/${pool.token}`} 
                         target="_blank" 
                         rel="noreferrer"
                         className="text-zinc-500 hover:text-blue-400 transition-colors opacity-0 group-hover:opacity-100"
-                        title="Ver no Basescan"
+                        title={`Ver no ${networkName === 'Base' ? 'Basescan' : 'Solscan'}`}
                       >
                         <ExternalLink size={14} />
                       </a>
                     </div>
                   </td>
+                  {networkName === 'Base' && (
                   <td className="px-5 py-3">
                     <div className="flex items-center gap-2">
                       <span className="px-2 py-1 bg-blue-500/10 text-blue-400 rounded text-xs font-bold border border-blue-500/20">
@@ -93,6 +92,7 @@ export default function PoolFeedTable() {
                       )}
                     </div>
                   </td>
+                  )}
                   <td className="px-5 py-3 text-right">
                     <button 
                       onClick={() => handleManualSnipe(pool.token)}

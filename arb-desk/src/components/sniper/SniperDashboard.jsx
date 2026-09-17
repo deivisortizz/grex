@@ -9,7 +9,7 @@ import BurnerWalletConfig from '../BurnerWalletConfig'
 import { Wifi, WifiOff, Wallet, Crosshair, Layers, Power, Play, Pause } from 'lucide-react'
 
 function SniperContent() {
-  const { isConnected, walletStatus, pools, isActive, toggleSniper } = useSniperContext()
+  const { isConnected, walletStatus, pools, isActive, toggleSniper, sendCommand } = useSniperContext()
 
   const maskAddress = (addr) => {
     if (!addr) return ''
@@ -164,7 +164,7 @@ function SniperContent() {
         {/* Pool Feed – 2/3 */}
         <div className="xl:col-span-2 h-[420px] overflow-x-auto">
           <div className="min-w-[800px] h-full">
-            <PoolFeedTable />
+            <PoolFeedTable pools={pools} sendCommand={sendCommand} networkName="Base" />
           </div>
         </div>
 

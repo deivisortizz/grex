@@ -3,10 +3,11 @@ import { useSolanaWebSocket } from '../../hooks/useSolanaWebSocket';
 import SolanaSniperTab from './SolanaSniperTab';
 import SolanaMetrics from './SolanaMetrics';
 import SolanaPositionsTable from './SolanaPositionsTable';
+import PoolFeedTable from '../sniper/PoolFeedTable';
 import { Power, Wifi, WifiOff, Layers, Crosshair, Wallet } from 'lucide-react';
 
 export default function SolanaDashboard() {
-  const { status, config, logs, metrics, positions, sendCommand } = useSolanaWebSocket();
+  const { status, config, logs, metrics, positions, pools, sendCommand } = useSolanaWebSocket();
   const isActive = config.is_active === true || config.status === 'watching' || config.status === 'monitoring_position';
 
   const toggleSniper = (activate) => {
@@ -180,7 +181,12 @@ export default function SolanaDashboard() {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-stretch">
         <SolanaSniperTab isActive={isActive} sendCommand={sendCommand} />
-        <SolanaPositionsTable positions={positions} />
+        <div className="flex flex-col gap-6">
+          <SolanaPositionsTable positions={positions} />
+          <div className="h-96">
+            <PoolFeedTable pools={pools} sendCommand={sendCommand} networkName="Solana" />
+          </div>
+        </div>
       </div>
 
       {/* Terminal Logs */}
