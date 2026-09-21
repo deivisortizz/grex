@@ -140,6 +140,12 @@ def init_db():
             pass
             
         try:
+            cursor.execute("ALTER TABLE solana_sniper_configs ADD COLUMN trade_amount REAL DEFAULT 0.05")
+        except sqlite3.OperationalError:
+            pass
+
+            
+        try:
             cursor.execute("ALTER TABLE solana_sniper_configs ADD COLUMN socials_filter BOOLEAN DEFAULT 1")
         except sqlite3.OperationalError:
             pass
@@ -508,26 +514,52 @@ def save_user_solana_wallet(req: SolanaWalletReq, current_user = Depends(get_cur
 
 @app.get("/api/user/solana_config")
 def get_user_solana_config(current_user = Depends(get_current_user), db: sqlite3.Connection = Depends(get_db)):
-    cursor = db.cursor()
-    cursor.execute("SELECT target_token, slippage, jito_tip, tp_pct, sl_pct, max_positions, hardcore_mode, trade_amount, anti_delay_filter, socials_filter, max_bonding_curve, raydium_migration_filter, raydium_migrator_active FROM solana_sniper_configs WHERE user_id = ?", (current_user["id"],))
-    row = cursor.fetchone()
-    if not row:
-        return {"target_token": "", "slippage": 15.0, "jito_tip": 0.001, "tp_pct": 100.0, "sl_pct": 20.0, "trade_amount": 0.005, "max_positions": 1, "hardcore_mode": False}
-    return {
-        "target_token": row["target_token"], 
-        "slippage": row["slippage"], 
-        "jito_tip": row["jito_tip"],
-        "tp_pct": row["tp_pct"] if row["tp_pct"] is not None else 100.0,
-        "sl_pct": row["sl_pct"] if row["sl_pct"] is not None else 20.0,
-        "trade_amount": row["trade_amount"] if "trade_amount" in row.keys() and row["trade_amount"] is not None else 0.005,
-        "max_positions": row["max_positions"] if row["max_positions"] is not None else 1,
-        "hardcore_mode": bool(row["hardcore_mode"]) if row["hardcore_mode"] is not None else False,
-        "anti_delay_filter": bool(row["anti_delay_filter"]) if "anti_delay_filter" in row.keys() and row["anti_delay_filter"] is not None else True,
-        "socials_filter": bool(row["socials_filter"]) if "socials_filter" in row.keys() and row["socials_filter"] is not None else True,
-        "max_bonding_curve": row["max_bonding_curve"] if "max_bonding_curve" in row.keys() and row["max_bonding_curve"] is not None else 20.0,
-        "raydium_migration_filter": bool(row["raydium_migration_filter"]) if "raydium_migration_filter" in row.keys() and row["raydium_migration_filter"] is not None else False,
-        "raydium_migrator_active": bool(row["raydium_migrator_active"]) if "raydium_migrator_active" in row.keys() and row["raydium_migrator_active"] is not None else False
+    fallback_config = {
+        "target_token": "", 
+        "slippage": 15.0, 
+        "jito_tip": 0.001, 
+        "tp_pct": 100.0, 
+        "sl_pct": 20.0, 
+        "trade_amount": 0.005, 
+        "max_positions": 1, 
+        "hardcore_mode": False,
+        "anti_delay_filter": True,
+        "socials_filter": True,
+        "max_bonding_curve": 20.0,
+        "raydium_migration_filter": False,
+        "raydium_migrator_active": False
     }
+
+    try:
+        cursor = db.cursor()
+        cursor.execute("SELECT * FROM solana_sniper_configs WHERE user_id = ?", (current_user["id"],))
+        row = cursor.fetchone()
+        
+        if not row:
+            return fallback_config
+            
+        row_keys = row.keys()
+        return {
+            "target_token": row["target_token"] if "target_token" in row_keys and row["target_token"] is not None else fallback_config["target_token"], 
+            "slippage": row["slippage"] if "slippage" in row_keys and row["slippage"] is not None else fallback_config["slippage"], 
+            "jito_tip": row["jito_tip"] if "jito_tip" in row_keys and row["jito_tip"] is not None else fallback_config["jito_tip"],
+            "tp_pct": row["tp_pct"] if "tp_pct" in row_keys and row["tp_pct"] is not None else fallback_config["tp_pct"],
+            "sl_pct": row["sl_pct"] if "sl_pct" in row_keys and row["sl_pct"] is not None else fallback_config["sl_pct"],
+            "trade_amount": row["trade_amount"] if "trade_amount" in row_keys and row["trade_amount"] is not None else fallback_config["trade_amount"],
+            "max_positions": row["max_positions"] if "max_positions" in row_keys and row["max_positions"] is not None else fallback_config["max_positions"],
+            "hardcore_mode": bool(row["hardcore_mode"]) if "hardcore_mode" in row_keys and row["hardcore_mode"] is not None else fallback_config["hardcore_mode"],
+            "anti_delay_filter": bool(row["anti_delay_filter"]) if "anti_delay_filter" in row_keys and row["anti_delay_filter"] is not None else fallback_config["anti_delay_filter"],
+            "socials_filter": bool(row["socials_filter"]) if "socials_filter" in row_keys and row["socials_filter"] is not None else fallback_config["socials_filter"],
+            "max_bonding_curve": row["max_bonding_curve"] if "max_bonding_curve" in row_keys and row["max_bonding_curve"] is not None else fallback_config["max_bonding_curve"],
+            "raydium_migration_filter": bool(row["raydium_migration_filter"]) if "raydium_migration_filter" in row_keys and row["raydium_migration_filter"] is not None else fallback_config["raydium_migration_filter"],
+            "raydium_migrator_active": bool(row["raydium_migrator_active"]) if "raydium_migrator_active" in row_keys and row["raydium_migrator_active"] is not None else fallback_config["raydium_migrator_active"]
+        }
+    except Exception as e:
+        import traceback
+        logger.error(f"Error fetching solana config for user {current_user['id']}: {str(e)}")
+        traceback.print_exc()
+        return fallback_config
+
 
 @app.post("/api/user/solana_config")
 def save_user_solana_config(req: SolanaConfigReq, current_user = Depends(get_current_user), db: sqlite3.Connection = Depends(get_db)):
