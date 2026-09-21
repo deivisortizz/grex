@@ -90,7 +90,7 @@ function PositionRow({ position, onPanicSell }) {
 
       {/* Panic Sell Button */}
       <button
-        onClick={() => onPanicSell(token)}
+        onClick={() => onPanicSell(token, true)}
         className="ml-2 shrink-0 flex items-center gap-1.5 px-3 py-2 bg-rose-500/15 hover:bg-rose-500/30 
                    border border-rose-500/40 text-rose-400 hover:text-rose-300 rounded-lg text-xs font-bold 
                    transition-all cursor-pointer active:scale-95"

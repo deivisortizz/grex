@@ -1,15 +1,23 @@
 import React, { useState, useEffect } from 'react';
-import { Save, Crosshair, Wallet, Trash2 } from 'lucide-react';
+import { Save, Crosshair, Wallet, Trash2, Users } from 'lucide-react';
 
-export default function SolanaSniperTab({ isActive, sendCommand }) {
+export default function SolanaSniperTab({ isActive, sendCommand, onSwitchToCopy }) {
 
-  const [formData, setFormData] = useState({
-    target_token: '',
-    slippage: 15,
-    jito_tip: 0.001,
-    tp_pct: 100,
-    sl_pct: 20
-  });
+
+    const [formData, setFormData] = useState({
+      target_token: '',
+      trade_amount: 0.05,
+      slippage: 15,
+      jito_tip: 0.001,
+      tp_pct: 100,
+      sl_pct: 20,
+      max_positions: 1,
+      hardcore_mode: false,
+      anti_delay_filter: true,
+      socials_filter: true,
+      momentum_filter: false,
+      max_bonding_curve: 20.0
+    });
 
   const [walletKey, setWalletKey] = useState('');
   const [walletAddress, setWalletAddress] = useState(null);
@@ -27,10 +35,17 @@ export default function SolanaSniperTab({ isActive, sendCommand }) {
         const data = await res.json();
         setFormData({
           target_token: data.target_token || '',
+          trade_amount: data.trade_amount || 0.05,
           slippage: data.slippage || 15,
           jito_tip: data.jito_tip || 0.001,
           tp_pct: data.tp_pct || 100,
-          sl_pct: data.sl_pct || 20
+          sl_pct: data.sl_pct || 20,
+          max_positions: data.max_positions || 1,
+          hardcore_mode: data.hardcore_mode || false,
+          anti_delay_filter: data.anti_delay_filter !== undefined ? data.anti_delay_filter : true,
+          socials_filter: data.socials_filter !== undefined ? data.socials_filter : true,
+          momentum_filter: data.momentum_filter || false,
+          max_bonding_curve: data.max_bonding_curve || 20.0
         });
       }
     } catch (err) {
@@ -54,7 +69,7 @@ export default function SolanaSniperTab({ isActive, sendCommand }) {
   const handleConfigChange = (e) => {
     const { name, value } = e.target;
     
-    if (['slippage', 'jito_tip', 'tp_pct', 'sl_pct'].includes(name)) {
+    if (['trade_amount', 'slippage', 'jito_tip', 'tp_pct', 'sl_pct'].includes(name)) {
       // Aceita apenas números, ponto e vírgula, e substitui vírgula por ponto
       let sanitized = value.replace(/,/g, '.').replace(/[^0-9.]/g, '');
       
@@ -67,6 +82,11 @@ export default function SolanaSniperTab({ isActive, sendCommand }) {
       setFormData(prev => ({
         ...prev,
         [name]: sanitized
+      }));
+    } else if (['hardcore_mode', 'anti_delay_filter', 'socials_filter', 'momentum_filter', 'raydium_migration_filter', 'raydium_migrator_active'].includes(name)) {
+      setFormData(prev => ({
+        ...prev,
+        [name]: e.target.checked
       }));
     } else {
       setFormData(prev => ({
@@ -90,10 +110,19 @@ export default function SolanaSniperTab({ isActive, sendCommand }) {
     
     const payload = {
       ...formData,
+      trade_amount: parseNumber(formData.trade_amount),
       slippage: parseNumber(formData.slippage),
       jito_tip: parseNumber(formData.jito_tip),
       tp_pct: parseNumber(formData.tp_pct),
-      sl_pct: parseNumber(formData.sl_pct)
+      sl_pct: parseNumber(formData.sl_pct),
+      max_positions: parseInt(formData.max_positions) || 1,
+      hardcore_mode: Boolean(formData.hardcore_mode),
+      anti_delay_filter: Boolean(formData.anti_delay_filter),
+      socials_filter: Boolean(formData.socials_filter),
+      momentum_filter: Boolean(formData.momentum_filter),
+      raydium_migration_filter: Boolean(formData.raydium_migration_filter),
+      raydium_migrator_active: Boolean(formData.raydium_migrator_active),
+      max_bonding_curve: parseNumber(formData.max_bonding_curve)
     };
     try {
       const token = localStorage.getItem('token');
@@ -170,6 +199,34 @@ export default function SolanaSniperTab({ isActive, sendCommand }) {
 
   return (
     <div className="flex flex-col gap-6">
+      {/* Smart Money Copy Trading Banner */}
+      {onSwitchToCopy && (
+        <div 
+          onClick={onSwitchToCopy}
+          className="bg-gradient-to-r from-cyan-950/40 via-zinc-900 to-zinc-900 border border-cyan-500/30 rounded-2xl p-4 flex items-center justify-between gap-4 cursor-pointer hover:border-cyan-500/50 hover:bg-zinc-800/40 transition-all group shadow-sm"
+        >
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-cyan-500/10 border border-cyan-500/25 flex items-center justify-center text-cyan-400 group-hover:scale-105 transition-transform shrink-0">
+              <Users size={18} />
+            </div>
+            <div>
+              <p className="text-xs font-bold text-white flex items-center gap-1.5">
+                Copy Trading & Wallet Hunter
+                <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
+                  SMART MONEY
+                </span>
+              </p>
+              <p className="text-[11px] text-zinc-400 mt-0.5">
+                Rastreie carteiras de insiders do Bloco 0 e replique compras automaticamente.
+              </p>
+            </div>
+          </div>
+          <button className="text-xs font-bold text-cyan-400 group-hover:text-cyan-300 flex items-center gap-1 shrink-0 font-mono">
+            Abrir Painel →
+          </button>
+        </div>
+      )}
+
       {/* Configurações */}
       <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6">
         <h3 className="text-sm font-bold text-white mb-6 flex items-center gap-2">
@@ -191,7 +248,19 @@ export default function SolanaSniperTab({ isActive, sendCommand }) {
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+            <div>
+              <label className="block text-xs font-semibold text-zinc-400 mb-2">Buy Amount (SOL)</label>
+              <input
+                type="text"
+                inputMode="decimal"
+                name="trade_amount"
+                value={formData.trade_amount}
+                onChange={handleConfigChange}
+                disabled={isActive}
+                className="w-full bg-black border border-zinc-800 rounded-xl px-4 py-3 text-sm text-cyan-400 focus:outline-none focus:border-cyan-500/50 disabled:opacity-50 font-mono transition-all"
+              />
+            </div>
             <div>
               <label className="block text-xs font-semibold text-zinc-400 mb-2">Jito Tip (SOL)</label>
               <input
@@ -242,6 +311,94 @@ export default function SolanaSniperTab({ isActive, sendCommand }) {
                 disabled={isActive}
                 className="w-full bg-black border border-zinc-800 rounded-xl px-4 py-3 text-sm text-rose-400 focus:outline-none focus:border-rose-500/50 disabled:opacity-50 font-mono transition-all"
               />
+            </div>
+          </div>
+
+          <div className="bg-black border border-zinc-800 rounded-xl p-4 flex flex-col gap-4 mt-4">
+            <h3 className="text-sm font-bold text-white flex items-center gap-2">
+              <Crosshair size={16} className="text-violet-500" />
+              Filtros de Qualidade (Camadas)
+            </h3>
+            
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="flex items-center justify-between bg-zinc-900/50 p-3 rounded-lg border border-zinc-800">
+                <div>
+                  <div className="text-xs font-bold text-white">Modo Hardcore / Cego</div>
+                  <div className="text-[10px] text-zinc-500 mt-0.5">Ignora redes sociais e limites</div>
+                </div>
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input type="checkbox" name="hardcore_mode" checked={formData.hardcore_mode} onChange={handleConfigChange} disabled={isActive} className="sr-only peer" />
+                  <div className="w-9 h-5 bg-zinc-800 rounded-full peer peer-checked:after:translate-x-full after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-rose-600"></div>
+                </label>
+              </div>
+
+              <div className="flex items-center justify-between bg-zinc-900/50 p-3 rounded-lg border border-zinc-800">
+                <div>
+                  <div className="text-xs font-bold text-white">Filtro Anti-Atraso</div>
+                  <div className="text-[10px] text-zinc-500 mt-0.5">Validar token fresco no bloco zero</div>
+                </div>
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input type="checkbox" name="anti_delay_filter" checked={formData.anti_delay_filter} onChange={handleConfigChange} disabled={isActive} className="sr-only peer" />
+                  <div className="w-9 h-5 bg-zinc-800 rounded-full peer peer-checked:after:translate-x-full after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-500"></div>
+                </label>
+              </div>
+
+              <div className="flex items-center justify-between bg-zinc-900/50 p-3 rounded-lg border border-zinc-800">
+                <div>
+                  <div className="text-xs font-bold text-white">Exigir Redes Sociais</div>
+                  <div className="text-[10px] text-zinc-500 mt-0.5">X/Twitter ou Telegram obrigatórios</div>
+                </div>
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input type="checkbox" name="socials_filter" checked={formData.socials_filter} onChange={handleConfigChange} disabled={isActive || formData.hardcore_mode} className="sr-only peer" />
+                  <div className="w-9 h-5 bg-zinc-800 rounded-full peer peer-checked:after:translate-x-full after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-500"></div>
+                </label>
+              </div>
+
+              <div className="flex items-center justify-between bg-zinc-900/50 p-3 rounded-lg border border-zinc-800">
+                <div>
+                  <div className="text-xs font-bold text-white flex items-center gap-1">Filtro de Momentum (5s) <span className="text-[9px] bg-rose-500/20 text-rose-400 px-1 rounded">HOT</span></div>
+                  <div className="text-[10px] text-zinc-500 mt-0.5">Acompanha o tape reading para confirmar alta</div>
+                </div>
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input type="checkbox" name="momentum_filter" checked={formData.momentum_filter} onChange={handleConfigChange} disabled={isActive} className="sr-only peer" />
+                  <div className="w-9 h-5 bg-zinc-800 rounded-full peer peer-checked:after:translate-x-full after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-rose-500"></div>
+                </label>
+              </div>
+
+              <div className="flex items-center justify-between bg-zinc-900/50 p-3 rounded-lg border border-zinc-800">
+                <div>
+                  <div className="text-xs font-bold text-white flex items-center gap-1">Migração Raydium <span className="text-[9px] bg-orange-500/20 text-orange-400 px-1 rounded">NEW</span></div>
+                  <div className="text-[10px] text-zinc-500 mt-0.5">Foca em tokens quase completando a curva</div>
+                </div>
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input type="checkbox" name="raydium_migration_filter" checked={formData.raydium_migration_filter} onChange={handleConfigChange} disabled={isActive} className="sr-only peer" />
+                  <div className="w-9 h-5 bg-zinc-800 rounded-full peer peer-checked:after:translate-x-full after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-orange-500"></div>
+                </label>
+              </div>
+
+              <div className="flex items-center justify-between bg-zinc-900/50 p-3 rounded-lg border border-zinc-800">
+                <div>
+                  <div className="text-xs font-bold text-white flex items-center gap-1">Raydium Pool Sniper <span className="text-[9px] bg-indigo-500/20 text-indigo-400 px-1 rounded">PRO</span></div>
+                  <div className="text-[10px] text-zinc-500 mt-0.5">Atira na abertura oficial da pool (Burned)</div>
+                </div>
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input type="checkbox" name="raydium_migrator_active" checked={formData.raydium_migrator_active} onChange={handleConfigChange} disabled={isActive} className="sr-only peer" />
+                  <div className="w-9 h-5 bg-zinc-800 rounded-full peer peer-checked:after:translate-x-full after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-indigo-500"></div>
+                </label>
+              </div>
+
+              <div className="bg-zinc-900/50 p-3 rounded-lg border border-zinc-800 flex flex-col justify-center md:col-span-2">
+                <label className="block text-xs font-bold text-white mb-1">Trava Bonding Curve (SOL)</label>
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] text-zinc-500">Bloqueia entrada se saldo virtual exceder X SOL:</span>
+                  <input type="text" inputMode="decimal" name="max_bonding_curve" value={formData.max_bonding_curve} onChange={handleConfigChange} disabled={isActive} className="w-20 bg-black border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-200 focus:outline-none focus:border-violet-500" />
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between mt-2 pt-4 border-t border-zinc-800">
+              <label className="block text-xs font-semibold text-zinc-400">Máximo Posições Simultâneas</label>
+              <input type="number" name="max_positions" min="1" max="20" value={formData.max_positions} onChange={handleConfigChange} disabled={isActive || formData.hardcore_mode} className="w-24 bg-black border border-zinc-800 rounded-lg px-3 py-1.5 text-sm text-zinc-200 focus:outline-none focus:border-violet-500/50" />
             </div>
           </div>
 

@@ -2,7 +2,8 @@ from fastapi import FastAPI, HTTPException, Depends
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from fastapi.security import OAuth2PasswordBearer
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from typing import Optional, List
 import os
 import sqlite3
 import jwt
@@ -12,6 +13,9 @@ from passlib.context import CryptContext
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from cryptography.fernet import Fernet
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger('GrexServer')
 
 # Configurações de Ambiente
 env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
@@ -115,6 +119,61 @@ def init_db():
         except sqlite3.OperationalError:
             pass # Coluna já existe
 
+        try:
+            cursor.execute("ALTER TABLE solana_sniper_configs ADD COLUMN is_active BOOLEAN DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass # Coluna já existe
+
+        try:
+            cursor.execute("ALTER TABLE solana_sniper_configs ADD COLUMN max_positions INTEGER DEFAULT 1")
+        except sqlite3.OperationalError:
+            pass # Coluna já existe
+
+        try:
+            cursor.execute("ALTER TABLE solana_sniper_configs ADD COLUMN hardcore_mode BOOLEAN DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass # Coluna já existe
+            
+        try:
+            cursor.execute("ALTER TABLE solana_sniper_configs ADD COLUMN anti_delay_filter BOOLEAN DEFAULT 1")
+        except sqlite3.OperationalError:
+            pass
+            
+        try:
+            cursor.execute("ALTER TABLE solana_sniper_configs ADD COLUMN socials_filter BOOLEAN DEFAULT 1")
+        except sqlite3.OperationalError:
+            pass
+            
+        try:
+            cursor.execute("ALTER TABLE solana_sniper_configs ADD COLUMN max_bonding_curve REAL DEFAULT 20.0")
+        except sqlite3.OperationalError:
+            pass
+
+        try:
+            cursor.execute("ALTER TABLE solana_sniper_configs ADD COLUMN raydium_migration_filter BOOLEAN DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass
+
+        try:
+            cursor.execute("ALTER TABLE solana_sniper_configs ADD COLUMN raydium_migrator_active BOOLEAN DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass
+
+        try:
+            cursor.execute("ALTER TABLE user_configs ADD COLUMN is_active BOOLEAN DEFAULT 1")
+        except sqlite3.OperationalError:
+            pass # Coluna já existe
+
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS tracked_wallets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                wallet_address TEXT,
+                label TEXT,
+                is_active BOOLEAN DEFAULT 1
+            )
+        ''')
+
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS solana_sniper_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -127,6 +186,34 @@ def init_db():
                 net_pnl_sol REAL,
                 net_pnl_usd REAL,
                 is_win BOOLEAN,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS copy_sniper_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                token_mint TEXT,
+                sol_spent REAL,
+                sol_received REAL,
+                jito_tip_buy REAL,
+                jito_tip_sell REAL,
+                net_pnl_sol REAL,
+                net_pnl_usd REAL,
+                is_win BOOLEAN,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+
+        # [FIX] Faltava esta tabela: _is_blacklisted/_add_to_blacklist (solana_core.py)
+        # já fazem SELECT/INSERT nela, mas como nunca foi criada, toda chamada falhava
+        # silenciosamente (capturada por um except genérico) e a blacklist automática
+        # de criadores nunca bloqueava ninguém, mesmo após um Stop-Loss catastrófico.
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS creator_blacklist (
+                creator_wallet TEXT PRIMARY KEY,
+                reason TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
@@ -202,11 +289,19 @@ class SolanaWalletReq(BaseModel):
     private_key: str
 
 class SolanaConfigReq(BaseModel):
-    target_token: str
-    slippage: float
-    jito_tip: float
-    tp_pct: float = 100.0
-    sl_pct: float = 20.0
+    target_token: Optional[str] = None
+    slippage: float = Field(default=15.0, ge=0.0, le=100.0)
+    jito_tip: float = Field(default=0.001, ge=0.0)
+    tp_pct: float = Field(default=100.0, ge=0.0)
+    sl_pct: float = Field(default=20.0, ge=0.0)
+    trade_amount: float = Field(default=0.05, ge=0.0)
+    max_positions: int = Field(default=1, ge=1)
+    hardcore_mode: bool = Field(default=False)
+    anti_delay_filter: bool = Field(default=True)
+    socials_filter: bool = Field(default=True)
+    max_bonding_curve: float = Field(default=20.0, ge=0.0)
+    raydium_migration_filter: bool = Field(default=False)
+    raydium_migrator_active: bool = Field(default=False)
 
 class BinanceReq(BaseModel):
     api_key: str
@@ -414,16 +509,24 @@ def save_user_solana_wallet(req: SolanaWalletReq, current_user = Depends(get_cur
 @app.get("/api/user/solana_config")
 def get_user_solana_config(current_user = Depends(get_current_user), db: sqlite3.Connection = Depends(get_db)):
     cursor = db.cursor()
-    cursor.execute("SELECT target_token, slippage, jito_tip, tp_pct, sl_pct FROM solana_sniper_configs WHERE user_id = ?", (current_user["id"],))
+    cursor.execute("SELECT target_token, slippage, jito_tip, tp_pct, sl_pct, max_positions, hardcore_mode, trade_amount, anti_delay_filter, socials_filter, max_bonding_curve, raydium_migration_filter, raydium_migrator_active FROM solana_sniper_configs WHERE user_id = ?", (current_user["id"],))
     row = cursor.fetchone()
     if not row:
-        return {"target_token": "", "slippage": 15.0, "jito_tip": 0.001, "tp_pct": 100.0, "sl_pct": 20.0}
+        return {"target_token": "", "slippage": 15.0, "jito_tip": 0.001, "tp_pct": 100.0, "sl_pct": 20.0, "trade_amount": 0.005, "max_positions": 1, "hardcore_mode": False}
     return {
         "target_token": row["target_token"], 
         "slippage": row["slippage"], 
         "jito_tip": row["jito_tip"],
         "tp_pct": row["tp_pct"] if row["tp_pct"] is not None else 100.0,
-        "sl_pct": row["sl_pct"] if row["sl_pct"] is not None else 20.0
+        "sl_pct": row["sl_pct"] if row["sl_pct"] is not None else 20.0,
+        "trade_amount": row["trade_amount"] if "trade_amount" in row.keys() and row["trade_amount"] is not None else 0.005,
+        "max_positions": row["max_positions"] if row["max_positions"] is not None else 1,
+        "hardcore_mode": bool(row["hardcore_mode"]) if row["hardcore_mode"] is not None else False,
+        "anti_delay_filter": bool(row["anti_delay_filter"]) if "anti_delay_filter" in row.keys() and row["anti_delay_filter"] is not None else True,
+        "socials_filter": bool(row["socials_filter"]) if "socials_filter" in row.keys() and row["socials_filter"] is not None else True,
+        "max_bonding_curve": row["max_bonding_curve"] if "max_bonding_curve" in row.keys() and row["max_bonding_curve"] is not None else 20.0,
+        "raydium_migration_filter": bool(row["raydium_migration_filter"]) if "raydium_migration_filter" in row.keys() and row["raydium_migration_filter"] is not None else False,
+        "raydium_migrator_active": bool(row["raydium_migrator_active"]) if "raydium_migrator_active" in row.keys() and row["raydium_migrator_active"] is not None else False
     }
 
 @app.post("/api/user/solana_config")
@@ -433,9 +536,24 @@ def save_user_solana_config(req: SolanaConfigReq, current_user = Depends(get_cur
         raise HTTPException(status_code=400, detail="Token Mint inválido. A chave deve estar vazia para o Modo Global ou ter ao menos 32 caracteres.")
         
     cursor = db.cursor()
-    cursor.execute("DELETE FROM solana_sniper_configs WHERE user_id = ?", (current_user["id"],))
-    cursor.execute("INSERT INTO solana_sniper_configs (user_id, target_token, slippage, jito_tip, tp_pct, sl_pct) VALUES (?, ?, ?, ?, ?, ?)", 
-                   (current_user["id"], target, req.slippage, req.jito_tip, req.tp_pct, req.sl_pct))
+    cursor.execute("""
+        INSERT INTO solana_sniper_configs (user_id, target_token, slippage, jito_tip, tp_pct, sl_pct, max_positions, hardcore_mode, trade_amount, anti_delay_filter, socials_filter, max_bonding_curve, raydium_migration_filter, raydium_migrator_active)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET
+            target_token = excluded.target_token,
+            slippage = excluded.slippage,
+            jito_tip = excluded.jito_tip,
+            tp_pct = excluded.tp_pct,
+            sl_pct = excluded.sl_pct,
+            max_positions = excluded.max_positions,
+            hardcore_mode = excluded.hardcore_mode,
+            trade_amount = excluded.trade_amount,
+            anti_delay_filter = excluded.anti_delay_filter,
+            socials_filter = excluded.socials_filter,
+            max_bonding_curve = excluded.max_bonding_curve,
+            raydium_migration_filter = excluded.raydium_migration_filter,
+            raydium_migrator_active = excluded.raydium_migrator_active
+    """, (current_user["id"], target, req.slippage, req.jito_tip, req.tp_pct, req.sl_pct, req.max_positions, 1 if req.hardcore_mode else 0, req.trade_amount, 1 if req.anti_delay_filter else 0, 1 if req.socials_filter else 0, req.max_bonding_curve, 1 if req.raydium_migration_filter else 0, 1 if req.raydium_migrator_active else 0))
     db.commit()
     return {"status": "success", "message": "Configuração do Token salva com sucesso!"}
 
@@ -524,6 +642,22 @@ def reset_system(current_user = Depends(get_current_admin)):
         return {"status": "success", "message": f"Sistema resetado. {len(removed)} arquivos apagados. Por favor, reinicie os containers."}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/trade-history")
+def get_trade_history(current_user = Depends(get_current_user), db: sqlite3.Connection = Depends(get_db)):
+    cursor = db.cursor()
+    try:
+        cursor.execute('''
+            SELECT token_mint, sol_spent, sol_received, jito_tip_buy, jito_tip_sell, net_pnl_sol, net_pnl_usd, is_win, created_at
+            FROM solana_sniper_history
+            WHERE user_id = ?
+            ORDER BY created_at DESC
+            LIMIT 100
+        ''', (current_user["id"],))
+        rows = cursor.fetchall()
+        return {"history": [dict(row) for row in rows]}
+    except sqlite3.OperationalError:
+        return {"history": []}
 
 @app.get("/api/analytics")
 def get_analytics(current_user = Depends(get_current_user)):
@@ -629,6 +763,79 @@ def delete_user(id: int, admin = Depends(get_current_admin), db: sqlite3.Connect
 
 # Monta o diretório de assets se ele existir (gerado pelo Vite)
 assets_path = "dist/assets"
+# ----------------------------------------------------------------------------
+# TRACKED WALLETS (COPY TRADING) ENDPOINTS
+# ----------------------------------------------------------------------------
+
+class TrackedWalletPayload(BaseModel):
+    wallet_address: str
+    label: str = ""
+
+@app.get("/api/solana/tracked-wallets")
+async def get_tracked_wallets(user: dict = Depends(get_current_user), db: sqlite3.Connection = Depends(get_db)):
+    user_id = user["id"]
+    cursor = db.cursor()
+    cursor.execute("SELECT id, wallet_address, label, is_active FROM tracked_wallets WHERE user_id = ?", (user_id,))
+    rows = cursor.fetchall()
+    wallets = [{"id": r[0], "wallet_address": r[1], "label": r[2], "is_active": bool(r[3])} for r in rows]
+    return {"status": "success", "wallets": wallets}
+
+@app.post("/api/solana/tracked-wallets")
+async def add_tracked_wallet(payload: TrackedWalletPayload, user: dict = Depends(get_current_user), db: sqlite3.Connection = Depends(get_db)):
+    user_id = user["id"]
+    cursor = db.cursor()
+    # Evitar duplicatas simples
+    cursor.execute("SELECT id FROM tracked_wallets WHERE user_id = ? AND wallet_address = ?", (user_id, payload.wallet_address))
+    if cursor.fetchone():
+        raise HTTPException(status_code=400, detail="Carteira já está sendo rastreada.")
+
+    cursor.execute("INSERT INTO tracked_wallets (user_id, wallet_address, label, is_active) VALUES (?, ?, ?, 1)",
+                   (user_id, payload.wallet_address, payload.label))
+    db.commit()
+    return {"status": "success", "message": "Carteira adicionada ao rastreamento."}
+
+@app.delete("/api/solana/tracked-wallets/{wallet_id}")
+async def remove_tracked_wallet(wallet_id: int, user: dict = Depends(get_current_user), db: sqlite3.Connection = Depends(get_db)):
+    user_id = user["id"]
+    cursor = db.cursor()
+    cursor.execute("DELETE FROM tracked_wallets WHERE id = ? AND user_id = ?", (wallet_id, user_id))
+    db.commit()
+    return {"status": "success"}
+
+@app.put("/api/solana/tracked-wallets/{wallet_id}/toggle")
+async def toggle_tracked_wallet(wallet_id: int, user: dict = Depends(get_current_user), db: sqlite3.Connection = Depends(get_db)):
+    user_id = user["id"]
+    cursor = db.cursor()
+    cursor.execute("UPDATE tracked_wallets SET is_active = NOT is_active WHERE id = ? AND user_id = ?", (wallet_id, user_id))
+    db.commit()
+    return {"status": "success"}
+
+class WalletHunterRequest(BaseModel):
+    mint: str
+
+@app.post("/api/solana/hunt-wallets")
+@app.post("/api/solana/hunter")
+async def hunt_wallets_endpoint(payload: WalletHunterRequest, user: dict = Depends(get_current_user)):
+    user_id = user["id"]
+    mint = payload.mint.strip()
+    if not mint:
+        raise HTTPException(status_code=400, detail="Mint address do token é obrigatório.")
+    
+    try:
+        from wallet_hunter import WalletHunter
+        rpc_url = os.getenv("SOLANA_RPC_URL", "https://mainnet.helius-rpc.com/?api-key=afef48e6-b88a-49e6-84c4-9b408156ee55")
+        hunter = WalletHunter(rpc_url)
+        res = await hunter.run(mint, user_id)
+        if not res or res.get("status") == "error":
+            raise HTTPException(status_code=400, detail=res.get("message", "Nenhuma transação encontrada para este token."))
+        return res
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Erro ao executar Wallet Hunter: {e}")
+        raise HTTPException(status_code=500, detail=f"Erro interno no Wallet Hunter: {str(e)}")
+
+
 if os.path.exists(assets_path):
     app.mount("/assets", StaticFiles(directory=assets_path), name="assets")
 
@@ -658,4 +865,3 @@ if __name__ == "__main__":
     host = os.getenv("HOST", "0.0.0.0")
     print(f"🚀 Iniciando Grex HFT UI Server em http://{host}:{port}")
     uvicorn.run("server:app", host=host, port=port, reload=True)
-

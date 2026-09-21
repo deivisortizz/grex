@@ -14,6 +14,7 @@ import SniperDashboard from './components/sniper/SniperDashboard'
 import AdminDashboard from './components/admin/AdminDashboard'
 import AccountSettings from './components/AccountSettings'
 import SolanaDashboard from './components/solana/SolanaDashboard'
+import TradeWinToast from './components/TradeWinToast'
 
 function App() {
   // Controle do menu mobile
@@ -47,7 +48,7 @@ function App() {
     }
 
     const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const dynamicWsUrl = `${wsProtocol}//${window.location.hostname}:8765`;
+    const dynamicWsUrl = `${wsProtocol}//${window.location.hostname}:8767`;
     const wsUrl = import.meta.env.VITE_WS_URL || dynamicWsUrl;
     const ws = new WebSocket(wsUrl)
     wsRef.current = ws
@@ -160,7 +161,8 @@ function App() {
   }
 
   return (
-    <div className="min-h-screen bg-zinc-950 flex font-sans text-zinc-100 overflow-x-hidden">
+    <div className="flex h-screen bg-black text-zinc-100 overflow-hidden font-sans">
+      <TradeWinToast />
       <Sidebar 
         wsStatus={wsStatus} 
         ping={ping} 
@@ -214,12 +216,13 @@ function App() {
         {activeTab === 'Corretoras' && <ExchangesTab exchanges={config.exchanges} sendCommand={sendCommand} />}
         {activeTab === 'Autobot' && <AutobotTab isSpatialActive={config.is_spatial_active} sendCommand={sendCommand} />}
         {activeTab === 'Base Sniper' && <SniperDashboard />}
-        {activeTab === 'Solana Sniper' && <SolanaDashboard />}
+        {activeTab === 'Solana Sniper' && <SolanaDashboard initialSubTab="sniper" />}
+        {activeTab === 'Copy Trading' && <SolanaDashboard initialSubTab="copy_trading" />}
         {activeTab === 'Master Admin' && isAdmin && <AdminDashboard token={token} />}
         {activeTab === 'Minha Conta' && <AccountSettings token={token} />}
 
         {/* Fallback for other tabs */}
-        {!['Cotações', 'Configurações', 'Histórico', 'Analytics', 'Autobot', 'Corretoras', 'Oceano Azul', 'Base Sniper', 'Solana Sniper', 'Master Admin', 'Minha Conta'].includes(activeTab) && (
+        {!['Cotações', 'Configurações', 'Histórico', 'Analytics', 'Autobot', 'Corretoras', 'Oceano Azul', 'Base Sniper', 'Solana Sniper', 'Copy Trading', 'Master Admin', 'Minha Conta'].includes(activeTab) && (
           <div className="text-zinc-500 py-10">Módulo em desenvolvimento...</div>
         )}
       </main>

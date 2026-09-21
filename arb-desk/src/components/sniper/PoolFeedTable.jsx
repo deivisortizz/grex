@@ -12,11 +12,17 @@ export default function PoolFeedTable({ pools = [], sendCommand, networkName = "
     return `${addr.substring(0, 6)}...${addr.substring(addr.length - 4)}`
   }
 
+  // [FIX] O branch "Solana" chamava fetch('/api/manual-buy'), rota que nunca existiu em
+  // server.py (processo separado, sem acesso à carteira/engine do sniper) — falharia em
+  // silêncio se este componente algum dia for reutilizado com networkName="Solana".
+  // Unificado para sempre usar o comando via WebSocket (já o único caminho real).
   const handleManualSnipe = (token) => {
-    sendCommand({
-      type: 'manual_snipe',
-      token: token
-    })
+    if (typeof sendCommand === 'function') {
+      sendCommand({
+        type: 'manual_snipe',
+        token: token
+      });
+    }
   }
 
   return (

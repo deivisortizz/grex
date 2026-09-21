@@ -1,7 +1,7 @@
 import React from 'react';
-import { Layers, ArrowUpRight, ArrowDownRight, ExternalLink } from 'lucide-react';
+import { Layers, ArrowUpRight, ArrowDownRight, ExternalLink, Zap } from 'lucide-react';
 
-export default function SolanaPositionsTable({ positions = [] }) {
+export default function SolanaPositionsTable({ positions = [], onPanicSell }) {
   if (!positions || positions.length === 0) {
     return (
       <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5">
@@ -27,9 +27,10 @@ export default function SolanaPositionsTable({ positions = [] }) {
           <thead>
             <tr className="border-b border-zinc-800">
               <th className="py-3 px-4 text-xs font-semibold text-zinc-400">Token</th>
-              <th className="py-3 px-4 text-xs font-semibold text-zinc-400">Preço Entrada</th>
-              <th className="py-3 px-4 text-xs font-semibold text-zinc-400">Preço Atual</th>
+              <th className="py-3 px-4 text-xs font-semibold text-zinc-400">Custo Total</th>
+              <th className="py-3 px-4 text-xs font-semibold text-zinc-400">Valor Atual</th>
               <th className="py-3 px-4 text-xs font-semibold text-zinc-400 text-right">PnL (%)</th>
+              <th className="py-3 px-4 text-xs font-semibold text-zinc-400 text-right">Ações</th>
             </tr>
           </thead>
           <tbody>
@@ -65,6 +66,15 @@ export default function SolanaPositionsTable({ positions = [] }) {
                       {isProfit ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />}
                       {Math.abs(pos.pnl_pct || 0).toFixed(2)}%
                     </span>
+                  </td>
+                  <td className="py-3 px-4 text-right">
+                    <button
+                      onClick={() => onPanicSell && onPanicSell(pos.token)}
+                      className="inline-flex items-center justify-center p-2 rounded-lg bg-rose-500/20 text-rose-500 hover:bg-rose-500/30 hover:text-rose-400 transition-colors"
+                      title="Panic Sell (100% Emergência)"
+                    >
+                      <Zap size={16} />
+                    </button>
                   </td>
                 </tr>
               );

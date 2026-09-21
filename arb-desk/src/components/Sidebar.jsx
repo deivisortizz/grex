@@ -10,7 +10,8 @@ import {
   Flame,
   Shield,
   User,
-  Zap
+  Zap,
+  Users
 } from 'lucide-react'
 
 const navItems = [
@@ -19,6 +20,7 @@ const navItems = [
   { name: 'Oceano Azul', icon: Waves },
   { name: 'Base Sniper', icon: Flame, accent: 'orange' },
   { name: 'Solana Sniper', icon: Zap, accent: 'violet' },
+  { name: 'Copy Trading', icon: Users, accent: 'cyan' },
   { name: 'Histórico', icon: History },
   { name: 'Configurações', icon: Settings },
   { name: 'Corretoras', icon: Target },
@@ -58,12 +60,13 @@ export default function Sidebar({ wsStatus = 'Offline', ping, activeTab, setActi
           const isOcean = item.name === 'Oceano Azul'
           const isSniper = item.name === 'Base Sniper'
           const isSolana = item.name === 'Solana Sniper'
+          const isCopy = item.name === 'Copy Trading'
           const isAdminTab = item.name === 'Master Admin'
           return (
             <button
               key={item.name}
               onClick={() => setActiveTab(item.name)}
-              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${
+              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all cursor-pointer ${
                 activeTab === item.name
                   ? isOcean
                     ? 'bg-blue-500/10 text-white border border-blue-500/30'
@@ -71,9 +74,11 @@ export default function Sidebar({ wsStatus = 'Offline', ping, activeTab, setActi
                       ? 'bg-orange-500/10 text-white border border-orange-500/30'
                       : isSolana
                         ? 'bg-violet-500/10 text-white border border-violet-500/30'
-                        : isAdminTab
-                          ? 'bg-purple-500/10 text-white border border-purple-500/30'
-                          : 'bg-zinc-800 text-white'
+                        : isCopy
+                          ? 'bg-cyan-500/10 text-white border border-cyan-500/30'
+                          : isAdminTab
+                            ? 'bg-purple-500/10 text-white border border-purple-500/30'
+                            : 'bg-zinc-800 text-white'
                   : 'text-zinc-400 hover:text-white hover:bg-zinc-800/50'
               }`}
             >
@@ -81,7 +86,17 @@ export default function Sidebar({ wsStatus = 'Offline', ping, activeTab, setActi
                 size={18}
                 className={
                   activeTab === item.name
-                    ? isOcean ? 'text-blue-400' : isSniper ? 'text-orange-400' : isSolana ? 'text-violet-400' : isAdminTab ? 'text-purple-400' : 'text-emerald-400'
+                    ? isOcean 
+                      ? 'text-blue-400' 
+                      : isSniper 
+                        ? 'text-orange-400' 
+                        : isSolana 
+                          ? 'text-violet-400' 
+                          : isCopy 
+                            ? 'text-cyan-400' 
+                            : isAdminTab 
+                              ? 'text-purple-400' 
+                              : 'text-emerald-400'
                     : ''
                 }
               />
@@ -99,6 +114,11 @@ export default function Sidebar({ wsStatus = 'Offline', ping, activeTab, setActi
               {isSolana && (
                 <span className="ml-auto text-[9px] font-bold uppercase tracking-widest text-violet-500/70 bg-violet-500/10 px-1.5 py-0.5 rounded">
                   SOL
+                </span>
+              )}
+              {isCopy && (
+                <span className="ml-auto text-[9px] font-bold uppercase tracking-widest text-cyan-400 bg-cyan-500/15 border border-cyan-500/30 px-1.5 py-0.5 rounded font-mono">
+                  SMART
                 </span>
               )}
               {isAdminTab && (

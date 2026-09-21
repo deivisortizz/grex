@@ -19,10 +19,22 @@ export function useSniperWebSocket() {
       return;
     }
 
-    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const dynamicWsUrl = `${wsProtocol}//${window.location.hostname}:8766`;
-    const wsUrl = import.meta.env.VITE_SNIPER_WS_URL || dynamicWsUrl;
-    const ws = new WebSocket(wsUrl)
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const host = window.location.hostname;
+    
+    // Conexão dinâmica: Prioriza a variável de ambiente, depois verifica localhost
+    let wsUrl = import.meta.env.VITE_SNIPER_WS_URL;
+    
+    if (!wsUrl) {
+      if (host === 'localhost' || host === '127.0.0.1') {
+        wsUrl = `${protocol}//${host}:8766`; // Porta local do base_meme_sniper.py
+      } else {
+        // Em produção sem variável de ambiente explícita, usa o mesmo host e a porta de produção
+        wsUrl = `${protocol}//${host}:8766`;
+      }
+    }
+    
+    const ws = new WebSocket(wsUrl);
     wsRef.current = ws
 
     ws.onopen = () => {
@@ -141,10 +153,11 @@ export function useSniperWebSocket() {
     })
   }, [sendCommand])
 
-  const forceSell = useCallback((token) => {
+  const forceSell = useCallback((token, is_panic = false) => {
     sendCommand({
       type: 'force_sell',
-      token: token
+      token: token,
+      is_panic: is_panic
     })
   }, [sendCommand])
 

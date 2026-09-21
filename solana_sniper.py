@@ -18,6 +18,9 @@ from solders.pubkey import Pubkey
 from solders.keypair import Keypair
 from solders.transaction import VersionedTransaction
 
+from solana_core import SolanaCore
+from raydium_migrator import RaydiumMigrator
+
 load_dotenv()
 
 # Configuração de Logs
@@ -32,170 +35,165 @@ logger = logging.getLogger('SolanaSniper')
 # Dependências Solana verificadas acima
 
 WS_PORT = int(os.getenv("SOLANA_SNIPER_WS_PORT", "8767"))
-DATA_DIR = os.getenv('DATA_DIR', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data'))
 
-JWT_SECRET = os.getenv("JWT_SECRET", "multi-tenant-super-secret-fallback")
-JWT_ALGORITHM = "HS256"
-
-class SolanaSniper:
+class SolanaSniper(SolanaCore):
     def __init__(self):
-        self.connected_clients = set()
-        # Estado separado por user_id
-        # user_id -> { "config": { ... }, "is_active": bool, "wallet": str }
-        self.user_states = {}
-        self.init_crypto()
+        super().__init__(logger_name="SolanaSniper")
+        self.migration_triggered = set()
+        self.raydium_migrator = RaydiumMigrator(self)
 
-    def init_crypto(self):
-        os.makedirs(DATA_DIR, exist_ok=True)
-        key_path = os.path.join(DATA_DIR, '.master.key')
-        if not os.path.exists(key_path):
-            logger.info("⚠️ [COFRE] Chave Mestra (.master.key) não encontrada. Gerando nova chave...")
-            master_key = Fernet.generate_key()
-            with open(key_path, 'wb') as f:
-                f.write(master_key)
-        else:
-            with open(key_path, 'rb') as f:
-                master_key = f.read()
-                
-        self.cipher = Fernet(master_key)
-        logger.info(f"🔑 [COFRE] Chave Mestra (Fernet) carregada com sucesso no Solana Sniper.")
-
-    def _get_user_state(self, user_id):
-        if user_id not in self.user_states:
-            self.user_states[user_id] = {
-                "config": {
-                    "target_token": "",
-                    "slippage": 15,
-                    "jito_tip": 0.001,
-                    "tp_pct": 100.0,
-                    "sl_pct": 20.0,
-                    "status": "idle" # idle, watching, sniping, complete, monitoring_position
-                },
-                "is_active": False,
-                "wallet": None,
-                "daily_pnl_usd": 0.0,
-                "total_trades": 0,
-                "win_trades": 0,
-                "open_positions": {}
+    async def _check_token_freshness(self, mint, session, rpc_url, anti_delay_filter=True, max_bonding_curve=20.0):
+        # Retorna (is_fresh, message)
+        if not anti_delay_filter:
+            return True, "Filtro Anti-Atraso desativado (bypass)."
+        try:
+            from solders.pubkey import Pubkey
+            import base64
+            import struct
+            mint_pk = Pubkey.from_string(mint)
+            program_pk = Pubkey.from_string("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P")
+            pda, _ = Pubkey.find_program_address([b"bonding-curve", bytes(mint_pk)], program_pk)
+            
+            payload = {
+                "jsonrpc": "2.0", "id": 1,
+                "method": "getAccountInfo",
+                "params": [str(pda), {"encoding": "base64"}]
             }
-        return self.user_states[user_id]
-
-    def _load_user_config_from_db(self, user_id):
-        db_path = os.path.join(DATA_DIR, 'sniper.db')
-        if not os.path.exists(db_path):
-            return False
-            
-        state = self._get_user_state(user_id)
-        
-        try:
-            with sqlite3.connect(db_path) as conn:
-                cursor = conn.cursor()
-                
-                # Load config
-                cursor.execute("SELECT target_token, slippage, jito_tip, tp_pct, sl_pct FROM solana_sniper_configs WHERE user_id = ?", (user_id,))
-                config_row = cursor.fetchone()
-                if config_row:
-                    new_token = config_row[0]
-                    state["config"]["target_token"] = new_token if new_token else ""
-                    state["config"]["slippage"] = config_row[1]
-                    state["config"]["jito_tip"] = config_row[2]
-                    state["config"]["tp_pct"] = config_row[3] if config_row[3] is not None else 100.0
-                    state["config"]["sl_pct"] = config_row[4] if config_row[4] is not None else 20.0
-                
-                # Load wallet
-                cursor.execute("SELECT pk_encrypted FROM solana_burner_wallet WHERE user_id = ?", (user_id,))
-                wallet_row = cursor.fetchone()
-                if wallet_row and wallet_row[0]:
-                    try:
-                        decrypted_pk = self.cipher.decrypt(wallet_row[0].encode()).decode() if self.cipher else wallet_row[0]
-                        state["wallet"] = decrypted_pk
-                    except Exception as dec_err:
-                        logger.error(f"Erro ao descriptografar carteira Solana (User {user_id}): {dec_err}")
-                        state["wallet"] = None
-                else:
-                    state["wallet"] = None
-                    
-            return True
-        except Exception as e:
-            logger.error(f"Erro ao ler banco de dados para user {user_id}: {e}")
-            return False
-
-    async def broadcast_to_user(self, user_id, payload):
-        if not self.connected_clients:
-            return
-            
-        message = json.dumps(payload)
-        to_remove = set()
-        for client in self.connected_clients:
-            if getattr(client, 'user_id', None) == user_id:
+            # [FIX] Antes: até 10 tentativas com timeout de 4s + backoff progressivo,
+            # o que podia levar ~50s no pior caso antes de liberar o "Modo Tolerante" —
+            # exatamente quando a RPC costuma travar (muitos bots batendo no mesmo token
+            # no bloco zero). Reduzido para falhar rápido e não perder a janela de entrada.
+            max_retries = 3
+            for attempt in range(max_retries):
                 try:
-                    await client.send(message)
-                except Exception:
-                    to_remove.add(client)
-        
-        for client in to_remove:
-            self.connected_clients.remove(client)
-
-    async def _get_sol_balance(self, pubkey_str, session, rpc_url):
-        payload = {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "getBalance",
-            "params": [pubkey_str]
-        }
-        try:
-            async with session.post(rpc_url, json=payload) as resp:
-                result = await resp.json()
-                if "result" in result and "value" in result["result"]:
-                    return result["result"]["value"] / 1_000_000_000
+                    async with session.post(rpc_url, json=payload, timeout=1.5) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            if "result" in data and data["result"]["value"]:
+                                b64_data = data["result"]["value"]["data"][0]
+                                raw_bytes = base64.b64decode(b64_data)
+                                if len(raw_bytes) >= 40:
+                                    v_sol = struct.unpack("<Q", raw_bytes[16:24])[0]
+                                    v_sol_normalized = v_sol / 1e9
+                                    # Tokens da Pump.fun começam com exatos 30 SOL de reservas virtuais.
+                                    if v_sol_normalized > (30.0 + max_bonding_curve):
+                                        return False, f"Bonding curve avançada ({v_sol_normalized:.2f} SOL)."
+                                    return True, "Token recém-criado (topo do bloco)."
+                        elif resp.status == 429: # Rate Limit
+                            await asyncio.sleep(0.3)
+                            continue
+                except (asyncio.TimeoutError, aiohttp.ClientError):
+                    # Se houver erro de rede/timeout, tolera e tenta de novo
+                    pass
+                    
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(0.2) # [FIX] Backoff curto e fixo — aqui velocidade > tolerância
+            
+            # Se não encontrou a conta no RPC após o loop ou deu muito timeout, retorna como Bloco Zero (Modo Tolerante)
+            return True, "Token no bloco zero ou RPC inacessível (Modo Tolerante)."
         except Exception:
             pass
-        return 0.0
+        return True, "Bypass de filtro (erro inesperado)"
 
-    async def _wait_for_balance_change(self, pubkey_str, initial_balance, is_buy, session, rpc_url, user_id):
-        retries = 0
-        current_balance = initial_balance
-        while retries < 15:
-            await asyncio.sleep(1)
-            current_balance = await self._get_sol_balance(pubkey_str, session, rpc_url)
-            
-            if is_buy and current_balance < initial_balance:
-                return current_balance
-            elif not is_buy and current_balance > initial_balance:
-                return current_balance
-                
-            retries += 1
-            
-        await self.log_to_user(user_id, "WARN", "Tempo esgotado aguardando mudança de saldo. Usando último saldo lido.")
-        return current_balance
+    async def _check_token_quality_for_global(self, mint, session, rpc_url, config):
+        hardcore = config.get("hardcore_mode", False)
 
-    async def _fetch_mint_from_tx(self, signature, session, rpc_url):
-        payload = {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "getTransaction",
-            "params": [
-                signature,
-                {"encoding": "jsonParsed", "maxSupportedTransactionVersion": 0, "commitment": "confirmed"}
-            ]
-        }
-        
-        # Faz até 10 tentativas esperando a transação ficar disponível no RPC
-        for _ in range(10):
-            try:
-                async with session.post(rpc_url, json=payload) as resp:
+        # 0. Blacklist Automática de Criadores & 1. Filtro de Redes Sociais
+        try:
+            async with session.get(f"https://frontend-api.pump.fun/coins/{mint}", timeout=2.0) as resp:
+                if resp.status == 200:
                     data = await resp.json()
-                    if "result" in data and data["result"]:
-                        meta = data["result"].get("meta", {})
-                        post_token_balances = meta.get("postTokenBalances", [])
-                        if post_token_balances:
-                            # O primeiro token balance criado na pump.fun é o próprio token
-                            return post_token_balances[0].get("mint")
-            except Exception:
-                pass
-            await asyncio.sleep(1)
+                    
+                    # Checagem de Blacklist (sempre ocorre)
+                    creator = data.get("creator")
+                    if creator and hasattr(self, '_is_blacklisted') and self._is_blacklisted(creator):
+                        return False, f"[BLACKLIST] Criador reincidente bloqueado ({creator})"
+                    
+                    # Checagem de Redes Sociais (se hardcore = False)
+                    if not hardcore and config.get("socials_filter", True):
+                        has_socials = data.get("twitter") or data.get("telegram") or data.get("website")
+                        if not has_socials:
+                            return False, "Sem redes sociais válidas detectadas."
+        except Exception:
+            pass # Soft-fail: API indisponível, ignorar filtro para não perder o snipe
+
+        # 2. Filtro de Fluxo Inicial (Volume)
+        # [FIX] Antes esse sleep de 1.5s + checagem RPC rodava MESMO com hardcore_mode
+        # ativado — o hardcore só pulava o filtro de redes sociais. Isso fazia o modo
+        # "Global" comprar sistematicamente 1.5s+ depois da criação do token mesmo no
+        # modo supostamente mais rápido, perdendo a janela de bloco zero pra outros bots.
+        if hardcore:
+            return True, "Hardcore Mode: filtro de fluxo inicial pulado (velocidade máxima)."
+
+        # Espera 1.5s para ver se entram compras além do próprio Dev.
+        await asyncio.sleep(1.5)
+        try:
+            from solders.pubkey import Pubkey
+            import base64
+            import struct
+            mint_pk = Pubkey.from_string(mint)
+            program_pk = Pubkey.from_string("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P")
+            pda, _ = Pubkey.find_program_address([b"bonding-curve", bytes(mint_pk)], program_pk)
             
-        return None
+            payload = {
+                "jsonrpc": "2.0", "id": 1,
+                "method": "getAccountInfo",
+                "params": [str(pda), {"encoding": "base64"}]
+            }
+            async with session.post(rpc_url, json=payload, timeout=2.0) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    if "result" in data and data["result"]["value"]:
+                        b64_data = data["result"]["value"]["data"][0]
+                        raw_bytes = base64.b64decode(b64_data)
+                        if len(raw_bytes) >= 40:
+                            v_sol = struct.unpack("<Q", raw_bytes[16:24])[0]
+                            v_sol_normalized = v_sol / 1e9
+                            
+                            # Pump.fun começa com exatos 30 SOL virtuais. 
+                            # Se tiver menos de 30.5 SOL (meio SOL injetado), o fluxo é praticamente nulo.
+                            if v_sol_normalized < 30.5:
+                                return False, f"Volume inicial insuficiente (Reservas SOL: {v_sol_normalized:.2f})."
+                            return True, "Aprovado nos filtros de qualidade."
+        except Exception:
+            pass
+            
+        return True, "RPC indisponível/Timeout, ignorando filtro de fluxo inicial (Bypass)."
+
+    async def _get_dynamic_metrics(self, mint, session, rpc_url):
+        try:
+            from solders.pubkey import Pubkey
+            import base64
+            import struct
+            mint_pk = Pubkey.from_string(mint)
+            program_pk = Pubkey.from_string("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P")
+            pda, _ = Pubkey.find_program_address([b"bonding-curve", bytes(mint_pk)], program_pk)
+            
+            payload = {"jsonrpc": "2.0", "id": 1, "method": "getAccountInfo", "params": [str(pda), {"encoding": "base64"}]}
+            async with session.post(rpc_url, json=payload, timeout=2.0) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    if "result" in data and data["result"]["value"]:
+                        b64_data = data["result"]["value"]["data"][0]
+                        raw_bytes = base64.b64decode(b64_data)
+                        if len(raw_bytes) >= 40:
+                            v_sol = struct.unpack("<Q", raw_bytes[16:24])[0]
+                            v_sol_normalized = v_sol / 1e9
+                            
+                            sol_price = 150.0
+                            try:
+                                async with session.get("https://api.binance.com/api/v3/ticker/price?symbol=SOLUSDT", timeout=1.0) as price_resp:
+                                    if price_resp.status == 200:
+                                        p_data = await price_resp.json()
+                                        sol_price = float(p_data.get("price", 150.0))
+                            except: pass
+                            
+                            calculated_mcap = (v_sol_normalized / 1.073) * sol_price
+                            estimated_vol = v_sol_normalized # Usar a reserva de SOL inteira como Volume/Reserva inicial
+                            return calculated_mcap, estimated_vol
+        except Exception:
+            pass
+        return 0.0, 0.0
 
     async def _process_new_pool(self, signature):
         rpc_url = os.getenv("SOLANA_RPC_URL", "https://mainnet.helius-rpc.com/?api-key=afef48e6-b88a-49e6-84c4-9b408156ee55")
@@ -204,13 +202,63 @@ class SolanaSniper:
             if not mint:
                 return
                 
-        logger.info(f"⚡ [LIVE POOL] Novo token criado na Pump.fun: {mint}")
-        
+            # Filtro estrito de tokens do sistema (WSOL)
+            if mint == "So11111111111111111111111111111111111111112" or mint.endswith("11111111111111111111111111111111"):
+                logger.info(f"Token de sistema ignorado: WSOL ({mint})")
+                return
+                
+            # Buscar metadados da Pump.fun para o Mayhem Screener (com retry para tokens muito novos)
+            metadata = {}
+            for attempt in range(3):
+                try:
+                    async with session.get(f"https://frontend-api.pump.fun/coins/{mint}", timeout=2.0) as resp:
+                        if resp.status == 200:
+                            metadata = await resp.json()
+                            if metadata.get("name"):
+                                break # Sucesso, sai do loop
+                except Exception as e:
+                    pass
+                await asyncio.sleep(0.5) # Aguarda meio segundo antes de tentar novamente
+
+            mcap = metadata.get("usd_market_cap", 0.0)
+            volume = metadata.get("volume", 0.0)
+
+            # [FIX] Antes esta chamada rodava DEPOIS do "async with aiohttp.ClientSession()"
+            # ter sido fechado (o bloco terminava logo acima, no fim do for de retry). A
+            # "session" já estava fechada aqui, então _get_dynamic_metrics sempre falhava
+            # (RuntimeError "Session is closed", engolido pelo próprio except genérico dela)
+            # e retornava (0.0, 0.0) — SEMPRE. Resultado: mcap/volume chegavam zerados no
+            # front-end pra TODO token recém-criado (a API da Pump.fun quase nunca indexa a
+            # tempo), que então caía no fallback fixo da UI ($4.5k / 0.01 SOL para 100% dos
+            # tokens, tornando a ordenação por MCap/Volume e o Smart Alert inúteis).
+            if not mcap or mcap == 0.0:
+                dyn_mcap, dyn_vol = await self._get_dynamic_metrics(mint, session, rpc_url)
+                if dyn_mcap > 0:
+                    mcap = dyn_mcap
+                if not volume or volume == 0.0:
+                    volume = dyn_vol
+
+        name = metadata.get("name") or metadata.get("tokenName")
+        symbol = metadata.get("symbol") or metadata.get("tokenSymbol")
+
+        if not name or name == "???":
+            name = f"Pump-{mint[:4]}"
+        if not symbol or symbol == "???":
+            symbol = f"PUMP"
+
+        logger.info(f"⚡ [LIVE POOL] Novo token criado na Pump.fun: {mint} | Name: {name}")
+
         # Broadcast para todos os clientes via WebSocket (Live Feed)
         payload = {
             "type": "new_pool",
             "token": mint,
-            "timestamp": int(datetime.now().timestamp() * 1000)
+            "timestamp": int(datetime.now().timestamp() * 1000),
+            "name": name,
+            "symbol": symbol,
+            "image_uri": metadata.get("image_uri", ""),
+            "usd_market_cap": mcap,
+            "volume": volume,
+            "reply_count": metadata.get("reply_count", 0)
         }
         msg = json.dumps(payload)
         to_remove = set()
@@ -234,465 +282,148 @@ class SolanaSniper:
                         await self.broadcast_to_user(user_id, {"type": "config", **state["config"], "is_active": state["is_active"]})
                         continue
                         
+                    if state["config"].get("raydium_migration_filter"):
+                        # [FIX] Usuário focado em Migração Raydium: ignora eventos de Bloco Zero
+                        continue
+                        
+                    max_pos = state["config"].get("max_positions", 1)
+
+                    # [FIX] Hardcore Mode só deve pular filtros que ADICIONAM ESPERA
+                    # (qualidade/momentum). max_positions é gestão de risco de capital,
+                    # não um filtro de velocidade — bypassar isso permitia abrir posições
+                    # ilimitadas simultâneas mesmo com o limite configurado pelo usuário.
+                    if len(state["open_positions"]) >= max_pos:
+                        await self.log_to_user(user_id, "WARN", f"⏳ Limite de {max_pos} posições atingido. Ignorando novo pool: {mint}")
+                        continue
+                        
                     await self.log_to_user(user_id, "INFO", f"🌍 Evento GLOBAL detectado na Pump.fun para: {mint}!")
                     state["config"]["status"] = "sniping"
                     await self.broadcast_to_user(user_id, {"type": "config", **state["config"], "is_active": state["is_active"]})
                     asyncio.create_task(self.handle_snipe_and_monitor(user_id, state, mint))
 
-    async def log_to_user(self, user_id, level, message):
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        await self.broadcast_to_user(user_id, {
-            "type": "log",
-            "log": f"[{timestamp}] [{level}] {message}"
-        })
-        logger.info(f"[User {user_id}] [{level}] {message}")
-
-    def _get_daily_stats_from_db(self, user_id):
-        db_path = os.path.join(DATA_DIR, 'sniper.db')
-        stats = {
-            "daily_pnl_usd": 0.0,
-            "daily_pnl_sol": 0.0,
-            "win_rate": 0.0,
-            "total_trades": 0,
-            "wins": 0,
-            "losses": 0
-        }
-        if not os.path.exists(db_path):
-            return stats
-            
+    async def _check_momentum_growth(self, user_id, target_token, duration=5.0):
+        """
+        Escuta o token no PumpPortal WS por 'duration' segundos.
+        Exige pelo menos 2 ticks de preço, preço final >= inicial, e sem quedas > 2% entre ticks.
+        """
+        prices = []
         try:
-            with sqlite3.connect(db_path) as conn:
-                cursor = conn.cursor()
-                cursor.execute('''
-                    SELECT 
-                        SUM(net_pnl_usd) as daily_pnl_usd,
-                        SUM(net_pnl_sol) as daily_pnl_sol,
-                        COUNT(*) as total_trades,
-                        SUM(CASE WHEN is_win THEN 1 ELSE 0 END) as wins,
-                        SUM(CASE WHEN NOT is_win THEN 1 ELSE 0 END) as losses
-                    FROM solana_sniper_history
-                    WHERE user_id = ? AND date(created_at) = date('now')
-                ''', (user_id,))
-                row = cursor.fetchone()
-                if row and row[2] > 0:
-                    stats["daily_pnl_usd"] = row[0] or 0.0
-                    stats["daily_pnl_sol"] = row[1] or 0.0
-                    stats["total_trades"] = row[2]
-                    stats["wins"] = row[3] or 0
-                    stats["losses"] = row[4] or 0
-                    stats["win_rate"] = round((stats["wins"] / stats["total_trades"]) * 100, 1) if stats["total_trades"] > 0 else 0.0
-        except Exception as e:
-            logger.error(f"Erro ao ler estatísticas do BD para user {user_id}: {e}")
-            
-        return stats
-
-    def _save_trade_history(self, user_id, token_mint, sol_spent, sol_received, jito_tip_buy, jito_tip_sell, is_win):
-        db_path = os.path.join(DATA_DIR, 'sniper.db')
-        # sol_spent e sol_received já são variações brutas do saldo da Helius.
-        # Eles já embutem nativamente a taxa do Jito, o Gas, e o valor do Token.
-        # Portanto, o PnL Líquido é puramente:
-        net_pnl_sol = sol_received - sol_spent
-        sol_price_usd = 150.0 # Placeholder estático ou buscar dinamicamente
-        net_pnl_usd = net_pnl_sol * sol_price_usd
-        
-        try:
-            with sqlite3.connect(db_path) as conn:
-                cursor = conn.cursor()
-                cursor.execute('''
-                    INSERT INTO solana_sniper_history (
-                        user_id, token_mint, sol_spent, sol_received, 
-                        jito_tip_buy, jito_tip_sell, net_pnl_sol, net_pnl_usd, is_win
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (user_id, token_mint, sol_spent, sol_received, jito_tip_buy, jito_tip_sell, net_pnl_sol, net_pnl_usd, is_win))
-                conn.commit()
-        except Exception as e:
-            logger.error(f"Erro ao salvar histórico do BD para user {user_id}: {e}")
-
-    async def broadcast_metrics(self, user_id):
-        stats = self._get_daily_stats_from_db(user_id)
-        await self.broadcast_to_user(user_id, {
-            "type": "STATS_UPDATE",
-            "data": stats
-        })
-
-    async def broadcast_positions(self, user_id):
-        state = self._get_user_state(user_id)
-        positions = list(state.get("open_positions", {}).values())
-        await self.broadcast_to_user(user_id, {"type": "open_positions", "positions": positions})
-
-    async def ws_handler(self, websocket, path=None):
-        logger.info("🔌 [WS] Nova conexão solicitada. Aguardando autenticação JWT...")
-        
-        try:
-            try:
-                auth_message = await asyncio.wait_for(websocket.recv(), timeout=10.0)
-                auth_data = json.loads(auth_message)
+            start_time = datetime.now().timestamp()
+            async with websockets.connect("wss://pumpportal.fun/api/data", ping_interval=30, ping_timeout=10) as ws:
+                subscribe_msg = {
+                    "method": "subscribeTokenTrade",
+                    "keys": [target_token]
+                }
+                await ws.send(json.dumps(subscribe_msg))
                 
-                if auth_data.get("type") == "auth" and auth_data.get("token"):
-                    token = auth_data.get("token")
+                while True:
+                    now = datetime.now().timestamp()
+                    if now - start_time >= duration:
+                        break
+                        
                     try:
-                        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-                        websocket.user_id = int(payload.get("sub"))
-                        logger.info(f"✅ [WS] Cliente autenticado (User ID: {websocket.user_id})")
-                    except Exception as e:
-                        logger.warning(f"❌ [WS] Erro JWT: {e}. Cliente desconectado.")
-                        await websocket.close(code=4001, reason="JWT Error")
-                        return
-                else:
-                    logger.warning("⚠️ [WS] Primeira mensagem não foi de autenticação. Desconectando.")
-                    await websocket.close(code=4001, reason="Auth required")
-                    return
-            except asyncio.TimeoutError:
-                logger.info("ℹ️ [WS] Tempo esgotado para autenticação. Desconectando.")
-                await websocket.close(code=4001, reason="Timeout")
-                return
-
-            self.connected_clients.add(websocket)
-            user_id = websocket.user_id
-            
-            # Carrega dados atualizados do banco ao conectar
-            self._load_user_config_from_db(user_id)
-            state = self._get_user_state(user_id)
-            
-            # Envia configuração atual
-            await websocket.send(json.dumps({
-                "type": "config",
-                **state["config"],
-                "is_active": state["is_active"]
-            }))
-            
-            # Envia estatísticas de PnL no momento da conexão
-            await self.broadcast_metrics(user_id)
-            
-            async for message in websocket:
-                data = json.loads(message)
-                
-                if data.get("type") == "start":
-                    # Recarrega banco para ter certeza que tem a config atualizada
-                    self._load_user_config_from_db(user_id)
-                    state = self._get_user_state(user_id)
-                    
-                    target_token = state["config"].get("target_token")
-                        
-                    if not state["wallet"]:
-                        await self.log_to_user(user_id, "ERROR", "Nenhuma carteira Solana (Burner Wallet) cadastrada.")
+                        # Timeout calculando tempo restante até o fim da janela de 5s
+                        remaining = duration - (now - start_time)
+                        if remaining <= 0:
+                            break
+                        message = await asyncio.wait_for(ws.recv(), timeout=min(1.0, remaining))
+                        data = json.loads(message)
+                        if data.get("mint") == target_token:
+                            v_sol = data.get("vSolInBondingCurve")
+                            v_tokens = data.get("vTokensInBondingCurve")
+                            if v_sol and v_tokens and v_tokens > 0:
+                                price_in_sol = float(v_sol) / float(v_tokens)
+                                prices.append(price_in_sol)
+                    except asyncio.TimeoutError:
                         continue
                         
-                    state["config"]["status"] = "watching"
-                    state["is_active"] = True
-                    
-                    if target_token:
-                        await self.log_to_user(user_id, "INFO", f"🚀 Iniciando monitoramento EXCLUSIVO para: {target_token}")
-                    else:
-                        await self.log_to_user(user_id, "WARN", "🌍 MODO GLOBAL: Escutando TODOS os novos lançamentos da Pump.fun!")
-                        
-                    await self.log_to_user(user_id, "INFO", f"⚙️ Estratégia: Pump.fun | Tip Jito: {state['config']['jito_tip']} SOL")
-                    await self.broadcast_to_user(user_id, {"type": "config", **state["config"], "is_active": state["is_active"]})
-                    
-                elif data.get("type") == "stop":
-                    state = self._get_user_state(user_id)
-                    state["is_active"] = False
-                    state["config"]["status"] = "idle"
-                    await self.log_to_user(user_id, "WARN", "⏸️ Monitoramento pausado pelo usuário.")
-                    await self.broadcast_to_user(user_id, {"type": "config", **state["config"], "is_active": state["is_active"]})
-                    
-                elif data.get("type") == "reset_wallet":
-                    state = self._get_user_state(user_id)
-                    state["wallet"] = None
-                    state["is_active"] = False
-                    state["config"]["status"] = "idle"
-                    await self.log_to_user(user_id, "WARN", "🗑️ Carteira Solana apagada. Monitoramento interrompido.")
-                    await self.broadcast_to_user(user_id, {"type": "config", **state["config"], "is_active": state["is_active"]})
-                    
-                elif data.get("type") == "reset_config":
-                    state = self._get_user_state(user_id)
-                    state["config"]["target_token"] = ""
-                    state["is_active"] = False
-                    state["config"]["status"] = "idle"
-                    await self.log_to_user(user_id, "WARN", "🗑️ Token Alvo apagado. Monitoramento interrompido.")
-                    await self.broadcast_to_user(user_id, {"type": "config", **state["config"], "is_active": state["is_active"]})
-
-                elif data.get("type") == "force_buy":
-                    token_to_buy = data.get("token")
-                    if not token_to_buy:
-                        await self.log_to_user(user_id, "ERROR", "Nenhum token fornecido para compra manual.")
-                        continue
-                    state = self._get_user_state(user_id)
-                    if not state["wallet"]:
-                        await self.log_to_user(user_id, "ERROR", "Nenhuma carteira Solana (Burner Wallet) cadastrada.")
-                        continue
-                    
-                    await self.log_to_user(user_id, "WARN", f"⚡ Invocando COMPRA MANUAL para o token: {token_to_buy}")
-                    asyncio.create_task(self.handle_snipe_and_monitor(user_id, state, token_to_buy))
-
-                elif data.get("type") == "force_sell":
-                    token_to_sell = data.get("token")
-                    if not token_to_sell:
-                        await self.log_to_user(user_id, "ERROR", "Nenhum token fornecido para venda manual.")
-                        continue
-                    state = self._get_user_state(user_id)
-                    if not state["wallet"]:
-                        await self.log_to_user(user_id, "ERROR", "Nenhuma carteira Solana (Burner Wallet) cadastrada.")
-                        continue
-                    
-                    await self.log_to_user(user_id, "WARN", f"🔴 Invocando VENDA MANUAL (DUMP) para o token: {token_to_sell}")
-                    asyncio.create_task(self.execute_real_sell(user_id, state, token_to_sell))
-
-
-        except websockets.exceptions.ConnectionClosed:
-            pass
         except Exception as e:
-            logger.error(f"WS Error: {e}")
-        finally:
-            if websocket in self.connected_clients:
-                self.connected_clients.remove(websocket)
+            logger.error(f"Erro no Momentum WS: {e}")
+            return False, "Erro ao rastrear momentum na Pump.fun."
 
-    async def execute_real_sell(self, user_id, state, token_mint):
-        try:
-            wallet_pk_str = state.get("wallet")
-            if not wallet_pk_str:
-                return False
-
-            try:
-                if wallet_pk_str.startswith("["):
-                    key_bytes = bytes(json.loads(wallet_pk_str))
-                    payer = Keypair.from_bytes(key_bytes)
-                else:
-                    payer = Keypair.from_bytes(base58.b58decode(wallet_pk_str))
-            except Exception as e:
-                await self.log_to_user(user_id, "ERROR", f"Erro ao decodificar chave privada: {e}")
-                return False
-
-            jito_tip_sol = float(state["config"]["jito_tip"])
-            slippage = float(state["config"]["slippage"])
-
-            await self.log_to_user(user_id, "WARN", f"🔴 Construindo transação de VENDA (PumpPortal) para {token_mint}...")
+        if len(prices) < 2:
+            return False, "Dados insuficientes (menos de 2 ticks no período)."
             
-            payload = {
-                "publicKey": str(payer.pubkey()),
-                "action": "sell",
-                "mint": token_mint.strip(),
-                "amount": "100%",
-                "denominatedInSol": "false",
-                "slippage": int(slippage),
-                "priorityFee": float(jito_tip_sol),
-                "pool": "auto"
-            }
-
-            rpc_url = os.getenv("SOLANA_RPC_URL", "https://mainnet.helius-rpc.com/?api-key=afef48e6-b88a-49e6-84c4-9b408156ee55")
-            async with aiohttp.ClientSession() as session:
-                payer_pubkey_str = str(payer.pubkey())
-                balance_before = await self._get_sol_balance(payer_pubkey_str, session, rpc_url)
-                await self.log_to_user(user_id, "INFO", f"💳 Saldo inicial antes da venda: {balance_before:.5f} SOL")
+        if prices[-1] < prices[0]:
+            return False, f"Tendência de queda (Início maior que o Fim)."
+            
+        for i in range(1, len(prices)):
+            if prices[i] < prices[i-1] * 0.98: # Queda > 2%
+                return False, f"Alta volatilidade (queda brusca >2% detectada)."
                 
-                async with session.post("https://pumpportal.fun/api/trade-local", json=payload) as response:
-                    if response.status != 200:
-                        err_text = await response.text()
-                        await self.log_to_user(user_id, "ERROR", f"Falha na API PumpPortal (Venda): {err_text}")
-                        return False
-                    tx_bytes = await response.read()
-
-                transaction = VersionedTransaction.from_bytes(tx_bytes)
-                signed_tx = VersionedTransaction(transaction.message, [payer])
-                
-                await self.log_to_user(user_id, "WARN", "🚀 Disparando transação de VENDA assinada para a rede (Helius/Jito)...")
-                
-                # Bypassing strict preflight simulation via HTTP POST JSON-RPC
-                encoded_tx = base64.b64encode(bytes(signed_tx)).decode('utf-8')
-                rpc_payload = {
-                    "jsonrpc": "2.0",
-                    "id": 1,
-                    "method": "sendTransaction",
-                    "params": [
-                        encoded_tx,
-                        {
-                            "encoding": "base64",
-                            "skipPreflight": True,
-                            "maxRetries": 2
-                        }
-                    ]
-                }
-                
-                async with session.post(rpc_url, json=rpc_payload) as rpc_resp:
-                    rpc_result = await rpc_resp.json()
-                    if "result" in rpc_result:
-                        tx_sig = rpc_result["result"]
-                        await self.log_to_user(user_id, "INFO", f"✅ Venda disparada! TX: {tx_sig}")
-                        
-                        await self.log_to_user(user_id, "INFO", "⏳ Aguardando confirmação (mudança de saldo)...")
-                        balance_after = await self._wait_for_balance_change(payer_pubkey_str, balance_before, False, session, rpc_url, user_id)
-                        
-                        sol_received = balance_after - balance_before
-                        if sol_received <= 0:
-                            # Fallback caso RPC atrase
-                            sol_received = 0.0
-                            
-                        await self.log_to_user(user_id, "INFO", f"💸 Saldo final: {balance_after:.5f} SOL | Receita Real: {sol_received:.5f} SOL")
-                        
-                        # Recupera dados da compra
-                        pos_data = state["open_positions"].get(token_mint, {})
-                        sol_spent = pos_data.get("sol_spent", 0.0)
-                        jito_tip_buy = pos_data.get("jito_tip_buy", 0.0)
-                        
-                        # Se não tinha sol_spent (ex: venda isolada), consideramos pnl neutro ou erro
-                        if sol_spent == 0:
-                            is_win = sol_received > (jito_tip_buy + jito_tip_sol)
-                        else:
-                            is_win = sol_received > sol_spent
-                            
-                        self._save_trade_history(
-                            user_id=user_id,
-                            token_mint=token_mint,
-                            sol_spent=sol_spent,
-                            sol_received=sol_received,
-                            jito_tip_buy=jito_tip_buy,
-                            jito_tip_sell=jito_tip_sol,
-                            is_win=is_win
-                        )
-                        
-                        # Remove a posição aberta
-                        if token_mint in state["open_positions"]:
-                            del state["open_positions"][token_mint]
-                            
-                        state["config"]["status"] = "idle"
-                        await self.broadcast_metrics(user_id)
-                        await self.broadcast_to_user(user_id, {"type": "config", **state["config"], "is_active": state["is_active"]})
-                        return True
-                    else:
-                        err_msg = rpc_result.get("error", "Erro desconhecido")
-                        await self.log_to_user(user_id, "ERROR", f"A rede recusou a transação de venda: {err_msg}")
-                        return False
-
-        except Exception as e:
-            await self.log_to_user(user_id, "ERROR", f"Falha crítica ao executar venda real: {e}")
-            logger.error(traceback.format_exc())
-            return False
-
-    async def execute_real_snipe(self, user_id, state, token_mint):
-        try:
-            wallet_pk_str = state.get("wallet")
-            if not wallet_pk_str:
-                await self.log_to_user(user_id, "ERROR", "Carteira Burner não encontrada para assinatura.")
-                return False
-
-            # Carrega a Keypair da Solana a partir da chave privada do cofre
-            try:
-                # Suporta formato base58 ou lista de bytes (JSON string)
-                if wallet_pk_str.startswith("["):
-                    key_bytes = bytes(json.loads(wallet_pk_str))
-                    payer = Keypair.from_bytes(key_bytes)
-                else:
-                    payer = Keypair.from_bytes(base58.b58decode(wallet_pk_str))
-            except Exception as e:
-                await self.log_to_user(user_id, "ERROR", f"Erro ao decodificar chave privada da Burner Wallet: {e}")
-                return False
-
-            await self.log_to_user(user_id, "INFO", f"🔑 Carteira carregada: {payer.pubkey()}")
-
-            jito_tip_sol = float(state["config"]["jito_tip"])
-            slippage = float(state["config"]["slippage"])
-            buy_amount_sol = float(state["config"].get("snipe_size", 0.05))
-
-            rpc_url = os.getenv("SOLANA_RPC_URL", "https://mainnet.helius-rpc.com/?api-key=afef48e6-b88a-49e6-84c4-9b408156ee55")
-            async with aiohttp.ClientSession() as session:
-                
-                # Puxa o saldo inicial (antes da compra)
-                payer_pubkey_str = str(payer.pubkey())
-                balance_before = await self._get_sol_balance(payer_pubkey_str, session, rpc_url)
-                await self.log_to_user(user_id, "INFO", f"💳 Saldo inicial: {balance_before:.5f} SOL")
-
-                await self.log_to_user(user_id, "WARN", f"🔥 Construindo transação atômica (PumpPortal) para {token_mint}...")
-                
-                payload = {
-                    "publicKey": str(payer.pubkey()),
-                    "action": "buy",
-                    "mint": token_mint.strip(),
-                    "amount": float(buy_amount_sol),
-                    "denominatedInSol": "true",
-                    "slippage": int(slippage),
-                    "priorityFee": float(jito_tip_sol),
-                    "pool": "auto"
-                }
-
-                async with session.post("https://pumpportal.fun/api/trade-local", json=payload) as response:
-                    if response.status != 200:
-                        err_text = await response.text()
-                        await self.log_to_user(user_id, "ERROR", f"Falha na API PumpPortal: {err_text}")
-                        return False
-                    tx_bytes = await response.read()
-
-                # Deserializa e prepara para assinatura
-                transaction = VersionedTransaction.from_bytes(tx_bytes)
-                
-                signed_tx = VersionedTransaction(transaction.message, [payer])
-                
-                await self.log_to_user(user_id, "WARN", "🚀 Disparando transação assinada para a rede (Helius/Jito)...")
-                
-                encoded_tx = base64.b64encode(bytes(signed_tx)).decode('utf-8')
-                rpc_payload = {
-                    "jsonrpc": "2.0",
-                    "id": 1,
-                    "method": "sendTransaction",
-                    "params": [
-                        encoded_tx,
-                        {
-                            "encoding": "base64",
-                            "skipPreflight": True,
-                            "maxRetries": 2
-                        }
-                    ]
-                }
-                
-                async with session.post(rpc_url, json=rpc_payload) as rpc_resp:
-                    rpc_result = await rpc_resp.json()
-                    
-                    if "result" in rpc_result:
-                        tx_sig = rpc_result["result"]
-                        await self.log_to_user(user_id, "INFO", f"✅ Transação de compra disparada! TX: {tx_sig}")
-                        
-                        await self.log_to_user(user_id, "INFO", "⏳ Aguardando confirmação (mudança de saldo)...")
-                        balance_after = await self._wait_for_balance_change(payer_pubkey_str, balance_before, True, session, rpc_url, user_id)
-                        
-                        sol_spent = balance_before - balance_after
-                        if sol_spent <= 0:
-                            # Fallback caso Helius não atualizou o saldo a tempo
-                            sol_spent = buy_amount_sol + jito_tip_sol + 0.0001
-                            
-                        await self.log_to_user(user_id, "INFO", f"💸 Saldo final: {balance_after:.5f} SOL | Custo Real: {sol_spent:.5f} SOL")
-                        
-                        # Guardamos o sol_spent no estado da posição aberta!
-                        state["open_positions"][token_mint] = {
-                            "sol_spent": sol_spent,
-                            "jito_tip_buy": jito_tip_sol
-                        }
-                        
-                        return True
-                    else:
-                        err_msg = rpc_result.get("error", "Erro desconhecido")
-                        await self.log_to_user(user_id, "ERROR", f"A rede retornou erro ao enviar a transação de compra: {err_msg}")
-                        return False
-
-        except Exception as e:
-            await self.log_to_user(user_id, "ERROR", f"Falha crítica ao executar snipe real: {e}")
-            logger.error(traceback.format_exc())
-            return False
+        return True, "Crescimento estável validado."
 
     async def handle_snipe_and_monitor(self, user_id, state, target_token):
-        success = await self.execute_real_snipe(user_id, state, target_token)
-        if success:
-            state["config"]["status"] = "monitoring_position"
-            await self.broadcast_to_user(user_id, {"type": "config", **state["config"], "is_active": state["is_active"]})
-            # Start position monitoring
-            entry_price_sol = 0.5 # Replace with actual logic when available
-            asyncio.create_task(self.monitor_position(user_id, entry_price_sol, token_mint=target_token))
-        else:
-            state["is_active"] = False
-            state["config"]["status"] = "idle"
-            await self.broadcast_to_user(user_id, {"type": "config", **state["config"], "is_active": state["is_active"]})
+        # [FIX] Toda a função roda dentro de um try/except: como é sempre disparada via
+        # asyncio.create_task (fire-and-forget), uma exceção não tratada aqui travaria o
+        # "status" do usuário em "sniping" para sempre (sniper órfão, sem crash visível e
+        # sem log de erro), sem qualquer chance de auto-recuperação.
+        try:
+            # Filtro de Anti-Golpe/Qualidade Apenas no Modo Global (quando target_token na config é vazio)
+            if not state["config"].get("target_token"):
+                rpc_url = os.getenv("SOLANA_RPC_URL", "https://mainnet.helius-rpc.com/?api-key=afef48e6-b88a-49e6-84c4-9b408156ee55")
+                async with aiohttp.ClientSession() as session:
+                    is_quality, msg = await self._check_token_quality_for_global(target_token, session, rpc_url, state.get("config", {}))
+                    if not is_quality:
+                        await self.log_to_user(user_id, "WARN", f"🚫 [FILTRO] Token descartado: {msg}")
+                        # Retorna para estado watching
+                        if state["is_active"]:
+                            state["config"]["status"] = "watching"
+                            await self.broadcast_to_user(user_id, {"type": "config", **state["config"], "is_active": state["is_active"]})
+                        return False
+                    await self.log_to_user(user_id, "INFO", f"✅ [FILTRO APROVADO] {msg}")
+
+            # [FIX] Consistência com o Hardcore Mode: hardcore = velocidade máxima, então também
+            # pula o filtro de Momentum (5s) — antes ele rodava os 5s completos mesmo com hardcore
+            # ativado, o que contradizia a própria proposta do modo (zero espera / zero filtro pesado).
+            hardcore_mode = state["config"].get("hardcore_mode", False)
+            if state["config"].get("momentum_filter", False):
+                if hardcore_mode:
+                    await self.log_to_user(user_id, "INFO", "⚡ Hardcore Mode ativo: filtro de Momentum (5s) pulado para velocidade máxima.")
+                else:
+                    await self.log_to_user(user_id, "INFO", "📈 Iniciando análise de Momentum (5s)...")
+                    is_momentum, msg = await self._check_momentum_growth(user_id, target_token)
+                    if not is_momentum:
+                        await self.log_to_user(user_id, "WARN", f"🚫 [FILTRO MOMENTUM] Token descartado: {msg}")
+                        if state["is_active"]:
+                            state["config"]["status"] = "watching"
+                            await self.broadcast_to_user(user_id, {"type": "config", **state["config"], "is_active": state["is_active"]})
+                        return False
+                    await self.log_to_user(user_id, "INFO", f"✅ [MOMENTUM APROVADO] {msg}")
+
+            success = await self.execute_real_snipe(user_id, state, target_token)
+            if success:
+                state["config"]["status"] = "monitoring_position"
+                await self.broadcast_to_user(user_id, {"type": "config", **state["config"], "is_active": state["is_active"]})
+                # Start position monitoring
+                # [FIX] Antes usávamos "sol_spent" (débito total da carteira: compra + tip + rent
+                # de conta nova) como referência de entrada pro monitor de SL/TP. Isso fazia
+                # qualquer trade pequeno parecer instantaneamente -50% a -75% no primeiro tick,
+                # mesmo sem o preço do token ter se mexido — porque tip e rent não compram token,
+                # só o "buy_amount_sol" vira posição de fato. sol_spent continua sendo usado (correto)
+                # no _save_trade_history pro P&L real em SOL no final do trade.
+                pos_data = state.get("open_positions", {}).get(target_token, {})
+                sol_spent = pos_data.get("sol_spent", 0.0)
+                entry_reference = pos_data.get("buy_amount_sol", sol_spent)
+                asyncio.create_task(self.monitor_position(user_id, entry_reference, token_mint=target_token))
+            else:
+                if state["is_active"]:
+                    await self.log_to_user(user_id, "WARN", "⚠️ A compra falhou ou foi abortada. Recuperando fôlego (3s)...")
+                    await asyncio.sleep(3)
+                    if state["is_active"]:
+                        state["config"]["status"] = "watching"
+                        await self.log_to_user(user_id, "INFO", "🔄 Sistema recuperado: Retornando ao modo de escuta para novos lançamentos.")
+                        await self.broadcast_to_user(user_id, {"type": "config", **state["config"], "is_active": state["is_active"]})
+        except Exception as e:
+            logger.error(f"Falha crítica não tratada em handle_snipe_and_monitor ({target_token}): {e}")
+            self.logger.error(traceback.format_exc())
+            if state.get("is_active") and target_token not in state.get("open_positions", {}):
+                state["config"]["status"] = "watching"
+                await self.broadcast_to_user(user_id, {"type": "config", **state["config"], "is_active": state["is_active"]})
 
     async def monitor_loop(self):
         wss_url = os.getenv("SOLANA_WSS_URL", "wss://mainnet.helius-rpc.com/?api-key=afef48e6-b88a-49e6-84c4-9b408156ee55")
-        pump_fun_program = "6EF8rrecthR5Dkzon8Nwu78hRvfX9PNXTxmD8bXU1K5A"
+        pump_fun_program = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"
         
         subscribe_msg = {
             "jsonrpc": "2.0",
@@ -703,13 +434,24 @@ class SolanaSniper:
                 {"commitment": "processed"}
             ]
         }
-        
+
+        # [FIX] A Helius derruba a conexão periodicamente (plano com limite de duração;
+        # "1011 keepalive ping timeout" nos logs a cada ~3min). Antes esperávamos 5s FIXOS
+        # antes de tentar reconectar — nesses 5s, qualquer token lançado na Pump.fun era
+        # perdido pelo Sniper Global (sem buffer/retry). Agora a primeira tentativa é quase
+        # instantânea (250ms) e só cresce exponencialmente se as reconexões continuarem
+        # falhando (rede realmente fora), até um teto de 10s.
+        min_delay = 0.25
+        max_delay = 10.0
+        reconnect_delay = min_delay
+
         while True:
             try:
                 async with websockets.connect(wss_url, ping_interval=60, ping_timeout=120) as ws:
                     logger.info(f"Conectado ao WSS Solana: {wss_url.split('?')[0]}***")
                     await ws.send(json.dumps(subscribe_msg))
-                    
+                    reconnect_delay = min_delay  # conexão OK: zera o backoff
+
                     async for message in ws:
                         data = json.loads(message)
                         
@@ -747,88 +489,64 @@ class SolanaSniper:
                                     await self.broadcast_to_user(user_id, {"type": "config", **state["config"], "is_active": state["is_active"]})
                                     asyncio.create_task(self.handle_snipe_and_monitor(user_id, state, target_token))
             except Exception as e:
-                logger.error(f"Erro no WSS Solana: {e}. Reconectando em 5s...")
-                await asyncio.sleep(5)
+                logger.error(f"Erro no WSS Solana: {e}. Reconectando em {reconnect_delay:.2f}s...")
+                await asyncio.sleep(reconnect_delay)
+                reconnect_delay = min(reconnect_delay * 2, max_delay)
 
-    async def monitor_position(self, user_id, entry_price_sol, token_mint="TOKEN_DEFAULT"):
-        state = self._get_user_state(user_id)
-        target_token = token_mint
-        tp_pct = state["config"]["tp_pct"]
-        sl_pct = state["config"]["sl_pct"]
-        
-        await self.log_to_user(user_id, "INFO", f"📈 Iniciando rastreamento de posição para {target_token}...")
-        await self.log_to_user(user_id, "WARN", f"🎯 Alvos definidos: Take-Profit (+{tp_pct}%) | Stop-Loss (-{sl_pct}%)")
-        
-        current_price = entry_price_sol
-        tp_target = entry_price_sol * (1 + (tp_pct / 100.0))
-        sl_target = entry_price_sol * (1 - (sl_pct / 100.0))
-        
-        # Registra posição inicial preservando dados existentes (como sol_spent do snipe)
-        if target_token not in state["open_positions"]:
-            state["open_positions"][target_token] = {}
-            
-        state["open_positions"][target_token].update({
-            "token": target_token,
-            "entry_price": entry_price_sol,
-            "current_price": current_price,
-            "pnl_pct": 0.0
-        })
-        await self.broadcast_positions(user_id)
-        
-        iteration = 0
-        profit_sol = 0
-        is_win = False
-        
-        while state["is_active"] and state["config"]["status"] == "monitoring_position":
-            await asyncio.sleep(3)
-            
-            # Simula oscilação de preço
-            iteration += 1
-            if iteration % 2 == 0:
-                current_price *= 1.15 # sobe 15%
-            else:
-                current_price *= 0.95 # cai 5%
-                
-            pnl_pct = ((current_price - entry_price_sol) / entry_price_sol) * 100
-            
-            # Atualiza e envia posições ao vivo
-            if target_token in state["open_positions"]:
-                state["open_positions"][target_token]["current_price"] = current_price
-                state["open_positions"][target_token]["pnl_pct"] = pnl_pct
-                await self.broadcast_positions(user_id)
-            
-            # Checa TP
-            if current_price >= tp_target:
-                await self.log_to_user(user_id, "INFO", f"💰 [TAKE PROFIT] Preço atingiu +{pnl_pct:.2f}%. Executando venda via Jupiter/Raydium...")
-                await self.execute_real_sell(user_id, state, target_token)
-                break
-                
-            # Checa SL
-            if current_price <= sl_target:
-                await self.log_to_user(user_id, "ERROR", f"🛑 [STOP LOSS] Preço atingiu {pnl_pct:.2f}%. Executando venda de emergência...")
-                await self.execute_real_sell(user_id, state, target_token)
-                break
-                
-        # PnL logic was delegated to execute_real_sell
-        pass
-        
-        if target_token in state["open_positions"]:
-            del state["open_positions"][target_token]
-            
-        await self.broadcast_metrics(user_id)
-        await self.broadcast_positions(user_id)
-                
-        # Finaliza o tracking e retorna para observação
-        if state["is_active"]:
-            state["config"]["status"] = "watching"
-            await self.log_to_user(user_id, "INFO", "🔄 Retornando ao modo de observação (watching) para novos snipes.")
-            await self.broadcast_to_user(user_id, {"type": "config", **state["config"], "is_active": state["is_active"]})
+    async def pumpportal_migration_loop(self):
+        min_delay = 0.25
+        max_delay = 10.0
+        reconnect_delay = min_delay
+        while True:
+            has_migration_users = any(state.get("config", {}).get("raydium_migration_filter") for state in self.user_states.values() if state["is_active"] and not state["config"].get("target_token"))
+            if not has_migration_users:
+                await asyncio.sleep(5)
+                continue
+
+            try:
+                async with websockets.connect("wss://pumpportal.fun/api/data", ping_interval=30, ping_timeout=10) as ws:
+                    logger.info("📡 Iniciando rastreador global de pré-migração Raydium...")
+                    await ws.send(json.dumps({"method": "subscribeTokenTrade"}))
+                    reconnect_delay = min_delay
+
+                    async for message in ws:
+                        has_migration_users = any(state.get("config", {}).get("raydium_migration_filter") for state in self.user_states.values() if state["is_active"] and not state["config"].get("target_token"))
+                        if not has_migration_users:
+                            break # Desconecta e volta a checar a cada 5s
+
+                        data = json.loads(message)
+                        v_sol = data.get("vSolInBondingCurve", 0)
+                        if v_sol:
+                            v_sol_normalized = float(v_sol) / 1e9
+                            # Virtual SOL starts at 30. Migration happens at ~115 SOL. Pre-migration is ~113.5 to 114.9 SOL.
+                            if 113.0 <= v_sol_normalized < 115.0:
+                                mint = data.get("mint")
+                                if mint and mint not in self.migration_triggered:
+                                    self.migration_triggered.add(mint)
+                                    # Dispara o snipe para usuários com raydium_migration_filter
+                                    for user_id, state in list(self.user_states.items()):
+                                        if state["is_active"] and not state["config"].get("target_token") and state["config"].get("raydium_migration_filter"):
+                                            # Evita disparar se já atingiu max_positions
+                                            max_pos = int(state["config"].get("max_positions", 1))
+                                            open_pos_count = len(state.get("open_positions", {}))
+                                            if open_pos_count < max_pos:
+                                                await self.log_to_user(user_id, "WARN", f"🚀 [RAYDIUM MIGRATION] Token pré-migração detectado! ({v_sol_normalized:.1f} SOL Virtuais)")
+                                                asyncio.create_task(self.handle_snipe_and_monitor(user_id, state, mint))
+            except Exception as e:
+                logger.error(f"Erro no WSS PumpPortal (Migration Mode): {e}. Reconectando em {reconnect_delay:.2f}s...")
+                await asyncio.sleep(reconnect_delay)
+                reconnect_delay = min(reconnect_delay * 2, max_delay)
 
     async def start(self):
         logger.info(f"🚀 Iniciando Solana Sniper na porta {WS_PORT}")
+        self._load_all_user_configs()
         # Iniciar servidor WebSocket
         async with websockets.serve(self.ws_handler, "0.0.0.0", WS_PORT):
-            await self.monitor_loop()
+            await asyncio.gather(
+                self.monitor_loop(),
+                self.pumpportal_migration_loop(),
+                self.raydium_migrator.migration_listener_loop()
+            )
 
 if __name__ == "__main__":
     sniper = SolanaSniper()

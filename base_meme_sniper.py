@@ -336,12 +336,12 @@ class BaseMemeSniper:
                 logger.info("Migrando tabela burner_wallet para incluir user_id...")
                 cursor.execute("ALTER TABLE burner_wallet ADD COLUMN user_id INTEGER REFERENCES users(id)")
                 
-            # Migração: Adicionar is_active na users se não existir
-            cursor.execute("PRAGMA table_info(users)")
-            user_cols = [col[1] for col in cursor.fetchall()]
-            if 'is_active' not in user_cols and len(user_cols) > 0:
-                logger.info("Migrando tabela users para incluir is_active...")
-                cursor.execute("ALTER TABLE users ADD COLUMN is_active BOOLEAN DEFAULT 1")
+            # Migração: Adicionar is_active na user_configs se não existir
+            cursor.execute("PRAGMA table_info(user_configs)")
+            cfg_cols = [col[1] for col in cursor.fetchall()]
+            if 'is_active' not in cfg_cols and len(cfg_cols) > 0:
+                logger.info("Migrando tabela user_configs para incluir is_active...")
+                cursor.execute("ALTER TABLE user_configs ADD COLUMN is_active BOOLEAN DEFAULT 1")
 
             conn.commit()
 
@@ -359,7 +359,7 @@ class BaseMemeSniper:
                 state['wallet_address'] = w['address']
                 state['private_key'] = self.decrypt_val(w['pk_encrypted'])
                 
-            # Carrega todos os Configs Multi-Tenant
+            # Carrega todos os Configs e status de ativação do Base Sniper Multi-Tenant
             cursor.execute("SELECT * FROM user_configs")
             configs = cursor.fetchall()
             for c in configs:
@@ -370,13 +370,8 @@ class BaseMemeSniper:
                     'tp_pct': c['tp_pct'],
                     'sl_pct': c['sl_pct']
                 })
-                
-            # Carrega o status de ativação do Sniper
-            cursor.execute("SELECT id, is_active FROM users")
-            users = cursor.fetchall()
-            for u in users:
-                state = self._get_user_state(u['id'])
-                state['is_active'] = bool(u['is_active'])
+                if 'is_active' in c.keys() and c['is_active'] is not None:
+                    state['is_active'] = bool(c['is_active'])
 
     def _sync_save_wallet(self, address, private_key, user_id=None):
         enc_pk = self.encrypt_val(private_key)
@@ -1145,11 +1140,15 @@ class BaseMemeSniper:
                             # Ativa automaticamente o sniper ao cadastrar carteira válida
                             state['is_active'] = True
                             
-                            # Persiste no banco de dados
+                            # Persiste no banco de dados (user_configs)
                             db_path = os.path.join(DATA_DIR, 'sniper.db')
                             with sqlite3.connect(db_path) as conn:
                                 cursor = conn.cursor()
-                                cursor.execute("UPDATE users SET is_active = 1 WHERE id = ?", (user_id,))
+                                cursor.execute("""
+                                    INSERT INTO user_configs (user_id, is_active)
+                                    VALUES (?, 1)
+                                    ON CONFLICT(user_id) DO UPDATE SET is_active = 1
+                                """, (user_id,))
                                 conn.commit()
                             
                             # Broadcast status atualizado para aquele usuário especificamente
@@ -1187,10 +1186,16 @@ class BaseMemeSniper:
                             else:
                                 state['is_active'] = bool(new_state)
                             
-                            if state['is_active']:
-                                logger.info(f"🟢 [STATUS] Base Meme Sniper ATIVADO pelo operador via painel! (User {user_id})")
-                            else:
-                                logger.warning(f"⏸️ [STATUS] Base Meme Sniper PAUSADO pelo operador via painel! (User {user_id})")
+                            # Persiste no banco de dados (user_configs)
+                            db_path = os.path.join(DATA_DIR, 'sniper.db')
+                            with sqlite3.connect(db_path) as conn:
+                                cursor = conn.cursor()
+                                cursor.execute("""
+                                    INSERT INTO user_configs (user_id, is_active)
+                                    VALUES (?, ?)
+                                    ON CONFLICT(user_id) DO UPDATE SET is_active = excluded.is_active
+                                """, (user_id, 1 if state['is_active'] else 0))
+                                conn.commit()
                             
                             await self.broadcast_ws({
                                 "type": "sniper_status",

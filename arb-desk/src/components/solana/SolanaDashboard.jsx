@@ -1,13 +1,34 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { useSolanaWebSocket } from '../../hooks/useSolanaWebSocket';
 import SolanaSniperTab from './SolanaSniperTab';
+import SolanaCopyTrading from './SolanaCopyTrading';
 import SolanaMetrics from './SolanaMetrics';
 import SolanaPositionsTable from './SolanaPositionsTable';
-import PoolFeedTable from '../sniper/PoolFeedTable';
-import { Power, Wifi, WifiOff, Layers, Crosshair, Wallet } from 'lucide-react';
+import SolanaHistoryTable from './SolanaHistoryTable';
+import SolanaPnLHistory from './SolanaPnLHistory';
+import SmartScansTab from './SmartScansTab';
+import MayhemScreenerTable from '../sniper/MayhemScreenerTable';
+import { Power, Wifi, WifiOff, Layers, Crosshair, Wallet, Users, Activity } from 'lucide-react';
 
-export default function SolanaDashboard() {
-  const { status, config, logs, metrics, positions, pools, sendCommand } = useSolanaWebSocket();
+export default function SolanaDashboard({ initialSubTab = 'sniper' }) {
+  const { status, config, logs, metrics, positions, pools, history, priceHistory, smartAlert, setSmartAlert, sendCommand } = useSolanaWebSocket();
+  const [activeSubTab, setActiveSubTab] = useState(initialSubTab);
+
+  useEffect(() => {
+    if (smartAlert) {
+      const timer = setTimeout(() => {
+        setSmartAlert(null);
+      }, 7000); // Exibe por 7 segundos
+      return () => clearTimeout(timer);
+    }
+  }, [smartAlert, setSmartAlert]);
+
+  useEffect(() => {
+    if (initialSubTab) {
+      setActiveSubTab(initialSubTab);
+    }
+  }, [initialSubTab]);
+
   const isActive = config.is_active === true || config.status === 'watching' || config.status === 'monitoring_position';
 
   const toggleSniper = (activate) => {
@@ -18,32 +39,54 @@ export default function SolanaDashboard() {
     }
   };
 
-  const forceBuy = () => {
-    let token = config.target_token;
-    if (!token) {
-      token = window.prompt("Nenhum token alvo configurado.\nInsira o endereço (Mint) do token que deseja comprar AGORA:");
-      if (!token) return;
-    }
-    const confirmBuy = window.confirm(`ATENÇÃO: Você está prestes a forçar uma COMPRA REAL na Solana para o token:\n${token}\n\nDeseja continuar?`);
-    if (confirmBuy) {
-      sendCommand('force_buy', { token });
-    }
+  // [FIX] Antes chamava fetch('/api/manual-sell'|'/api/manual-buy'), rotas que nunca
+  // existiram em server.py (processo separado, sem acesso à carteira/engine do sniper).
+  // O comando real de compra/venda manual só existe via WebSocket (force_buy/force_sell,
+  // tratado em solana_core.py ws_handler), que já está conectado e autenticado aqui.
+  const handleManualSell = (token) => {
+    sendCommand('force_sell', { token });
   };
 
-  const forceSell = () => {
-    let token = config.target_token;
-    if (!token) {
-      token = window.prompt("Nenhum token alvo configurado.\nInsira o endereço (Mint) do token que deseja VENDER AGORA (Dump 100%):");
-      if (!token) return;
-    }
-    const confirmSell = window.confirm(`🚨 PANIC SELL 🚨\n\nVocê está prestes a fazer o DUMP (Vender 100%) da sua posição no token:\n${token}\n\nDeseja confirmar a venda imediata na rede?`);
-    if (confirmSell) {
-      sendCommand('force_sell', { token });
-    }
+  const handleAlertBuy = (token) => {
+    sendCommand('force_buy', { token });
+    setSmartAlert(null);
   };
 
   return (
-    <div className="flex flex-col gap-6 w-full max-w-7xl mx-auto">
+    <div className="flex flex-col gap-6 w-full max-w-7xl mx-auto relative">
+      {/* Floating Smart Alert Toast */}
+      {smartAlert && (
+        <div className="fixed top-24 right-8 z-50 animate-in slide-in-from-right-8 fade-in duration-300">
+          <div className="bg-zinc-950/95 border border-fuchsia-500/50 shadow-2xl shadow-fuchsia-500/20 p-4 rounded-xl flex items-start gap-4 max-w-sm backdrop-blur-md">
+            <div className="text-3xl animate-bounce">🐟</div>
+            <div className="flex-1">
+              <div className="flex items-center justify-between">
+                <h4 className="text-fuchsia-400 font-black text-sm uppercase tracking-wider">Peixe à Vista!</h4>
+                <button onClick={() => setSmartAlert(null)} className="text-zinc-500 hover:text-white">&times;</button>
+              </div>
+              <p className="text-zinc-300 text-sm font-bold mt-1">{smartAlert.symbol} <span className="text-xs text-zinc-500 font-mono">detectado com</span></p>
+              <p className="text-emerald-400 text-xs font-mono mb-3">{smartAlert.reason}</p>
+              <div className="flex gap-2">
+                <button 
+                  onClick={() => {
+                    setActiveSubTab('smart_scans');
+                    setSmartAlert(null);
+                  }}
+                  className="flex-1 bg-zinc-800 hover:bg-zinc-700 text-white text-xs font-bold py-1.5 rounded-lg transition-colors border border-zinc-700"
+                >
+                  Ver no Radar
+                </button>
+                <button 
+                  onClick={() => handleAlertBuy(smartAlert.token)}
+                  className="flex-1 bg-fuchsia-600 hover:bg-fuchsia-500 text-white text-xs font-bold py-1.5 rounded-lg transition-colors shadow-lg shadow-fuchsia-500/30 flex items-center justify-center gap-1"
+                >
+                  <Crosshair size={12} /> Snipe
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
       
       {/* ── Master Control Banner ── */}
       <div className={`border rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 transition-all duration-300 ${
@@ -80,20 +123,6 @@ export default function SolanaDashboard() {
         </div>
 
         <div className="flex flex-col sm:flex-row items-center gap-3 w-full sm:w-auto justify-end">
-          <button
-            onClick={forceBuy}
-            className="w-full sm:w-auto px-5 py-3 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all shadow-lg cursor-pointer bg-amber-500 hover:bg-amber-400 text-zinc-900 shadow-amber-500/20 active:scale-95"
-          >
-            ⚡ Forçar Compra
-          </button>
-
-          <button
-            onClick={forceSell}
-            className="w-full sm:w-auto px-5 py-3 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all shadow-lg cursor-pointer bg-rose-600 hover:bg-rose-500 text-white shadow-rose-500/20 active:scale-95"
-          >
-            🔴 Forçar Venda
-          </button>
-
           <button
             onClick={() => toggleSniper(!isActive)}
             className={`w-full sm:w-auto px-6 py-3 rounded-xl font-bold text-sm flex items-center justify-center gap-2.5 transition-all shadow-lg cursor-pointer ${
@@ -179,15 +208,104 @@ export default function SolanaDashboard() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-stretch">
-        <SolanaSniperTab isActive={isActive} sendCommand={sendCommand} />
-        <div className="flex flex-col gap-6">
-          <SolanaPositionsTable positions={positions} />
-          <div className="h-96">
-            <PoolFeedTable pools={pools} sendCommand={sendCommand} networkName="Solana" />
+      {/* ── Sub-Navigation: Mode Selector ── */}
+      <div className="flex flex-wrap items-center gap-2 border-b border-zinc-800 pb-3">
+        <button
+          onClick={() => setActiveSubTab('sniper')}
+          className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-bold transition-all cursor-pointer ${
+            activeSubTab === 'sniper'
+              ? 'bg-violet-600 text-white shadow-lg shadow-violet-600/25 border border-violet-500'
+              : 'bg-zinc-900/80 text-zinc-400 hover:text-white hover:bg-zinc-800 border border-zinc-800'
+          }`}
+        >
+          <Crosshair size={16} />
+          Sniper Pump.fun (Autônomo)
+        </button>
+
+        <button
+          onClick={() => setActiveSubTab('copy_trading')}
+          className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-bold transition-all cursor-pointer ${
+            activeSubTab === 'copy_trading'
+              ? 'bg-cyan-500 text-zinc-950 shadow-lg shadow-cyan-500/25 border border-cyan-400 font-extrabold'
+              : 'bg-zinc-900/80 text-zinc-400 hover:text-white hover:bg-zinc-800 border border-zinc-800'
+          }`}
+        >
+          <Users size={16} />
+          Copy Trading & Wallet Hunter
+          <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded uppercase ${
+            activeSubTab === 'copy_trading'
+              ? 'bg-zinc-950/30 text-zinc-900 font-bold'
+              : 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/30'
+          }`}>
+            Smart Money
+          </span>
+        </button>
+
+        <button
+          onClick={() => setActiveSubTab('pnl_history')}
+          className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-bold transition-all cursor-pointer ${
+            activeSubTab === 'pnl_history'
+              ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-600/25 border border-emerald-500'
+              : 'bg-zinc-900/80 text-zinc-400 hover:text-white hover:bg-zinc-800 border border-zinc-800'
+          }`}
+        >
+          <Activity size={16} />
+          Histórico & PnL
+        </button>
+
+        <button
+          onClick={() => setActiveSubTab('smart_scans')}
+          className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-bold transition-all cursor-pointer ${
+            activeSubTab === 'smart_scans'
+              ? 'bg-fuchsia-600 text-white shadow-lg shadow-fuchsia-600/25 border border-fuchsia-500'
+              : 'bg-zinc-900/80 text-zinc-400 hover:text-white hover:bg-zinc-800 border border-zinc-800'
+          }`}
+        >
+          <span className="text-lg">🚀</span>
+          Smart Scans
+        </button>
+      </div>
+
+      {activeSubTab === 'sniper' ? (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-stretch">
+          <SolanaSniperTab isActive={isActive} sendCommand={sendCommand} onSwitchToCopy={() => setActiveSubTab('copy_trading')} />
+          <div className="flex flex-col gap-6 h-[800px]">
+            <MayhemScreenerTable
+              pools={pools}
+              positions={positions}
+              history={history}
+              priceHistory={priceHistory}
+              sendCommand={sendCommand}
+              networkName="Solana"
+            />
           </div>
         </div>
-      </div>
+      ) : activeSubTab === 'copy_trading' ? (
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+          <div className="lg:col-span-8 flex flex-col gap-6">
+            <SolanaCopyTrading />
+          </div>
+          <div className="lg:col-span-4 flex flex-col gap-6 h-[800px]">
+            <MayhemScreenerTable
+              pools={pools}
+              positions={positions}
+              history={history}
+              priceHistory={priceHistory}
+              sendCommand={sendCommand}
+              networkName="Solana"
+            />
+          </div>
+        </div>
+      ) : activeSubTab === 'pnl_history' ? (
+        <div className="h-[800px]">
+          <SolanaPnLHistory sendCommand={sendCommand} />
+        </div>
+      ) : activeSubTab === 'smart_scans' ? (
+        <div className="h-[800px]">
+          <SmartScansTab pools={pools} positions={positions} history={history} priceHistory={priceHistory} />
+        </div>
+      ) : null}
+
 
       {/* Terminal Logs */}
       <div className="bg-black border border-zinc-800 rounded-2xl p-5 mt-6 font-mono text-sm h-64 overflow-y-auto">

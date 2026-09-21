@@ -3,6 +3,7 @@ import { useSniperWebSocket } from '../hooks/useSniperWebSocket'
 
 const SniperContext = createContext(null)
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function SniperProvider({ children }) {
   const sniperState = useSniperWebSocket()
 
@@ -13,6 +14,7 @@ export function SniperProvider({ children }) {
   )
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function useSniperContext() {
   const context = useContext(SniperContext)
   if (!context) {
