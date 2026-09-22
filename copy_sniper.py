@@ -9,7 +9,7 @@ import sys
 import aiohttp
 from dotenv import load_dotenv
 
-from solana_core import SolanaCore, DATA_DIR
+from solana_core import SolanaCore, DATA_DIR, is_rate_limited_error, rate_limit_delay
 
 load_dotenv()
 
@@ -225,6 +225,11 @@ class CopySniper(SolanaCore):
         max_delay = 10.0
         reconnect_delay = min_delay
 
+        # [FIX] Backoff separado e bem mais conservador para HTTP 429 (rate limit) —
+        # reconectar em 250ms contra uma Helius que já está nos rejeitando só piora.
+        rate_limit_streak = 0
+        consecutive_errors = 0
+
         while True:
             self._refresh_copy_trading_state()
             wallet_map = self._build_wallet_watch_map()
@@ -236,18 +241,25 @@ class CopySniper(SolanaCore):
             try:
                 async with websockets.connect(wss_url, ping_interval=60, ping_timeout=120) as ws:
                     # A Solana só aceita 1 endereço por assinatura "mentions" — uma
-                    # logsSubscribe por carteira, todas na mesma conexão WS.
+                    # logsSubscribe por carteira, todas na mesma conexão WS. Espaçadas
+                    # em 50ms entre si pra não disparar uma rajada de requisições no
+                    # handshake quando há muitas carteiras rastreadas (contribuía pro 429).
                     id_to_wallet = {}
-                    for idx, wallet in enumerate(wallet_map.keys()):
+                    wallet_list = list(wallet_map.keys())
+                    for idx, wallet in enumerate(wallet_list):
                         req_id = idx + 1
                         id_to_wallet[req_id] = wallet
                         await ws.send(json.dumps({
                             "jsonrpc": "2.0", "id": req_id, "method": "logsSubscribe",
                             "params": [{"mentions": [wallet]}, {"commitment": "processed"}]
                         }))
+                        if idx < len(wallet_list) - 1:
+                            await asyncio.sleep(0.05)
 
                     logger.info(f"📡 Copy Sniper monitorando {len(wallet_map)} carteira(s) rastreada(s) via Helius WSS...")
                     reconnect_delay = min_delay
+                    rate_limit_streak = 0
+                    consecutive_errors = 0
                     sub_to_wallet = {}
 
                     async with aiohttp.ClientSession() as session:
@@ -309,9 +321,19 @@ class CopySniper(SolanaCore):
                                 asyncio.create_task(self.handle_copy_snipe(user_id, state, mint, wallet))
 
             except Exception as e:
-                logger.error(f"Erro no WSS Copy Sniper: {e}. Reconectando em {reconnect_delay:.2f}s...")
-                await asyncio.sleep(reconnect_delay)
-                reconnect_delay = min(reconnect_delay * 2, max_delay)
+                consecutive_errors += 1
+                if is_rate_limited_error(e):
+                    delay = rate_limit_delay(rate_limit_streak)
+                    rate_limit_streak += 1
+                    if consecutive_errors <= 3 or consecutive_errors % 5 == 0:
+                        logger.error(f"⛔ Helius retornou 429 (rate limit) no Copy Sniper. Aguardando {delay:.0f}s (ocorrência #{consecutive_errors})...")
+                    await asyncio.sleep(delay)
+                else:
+                    rate_limit_streak = 0
+                    if consecutive_errors <= 3 or consecutive_errors % 5 == 0:
+                        logger.error(f"Erro no WSS Copy Sniper: {e}. Reconectando em {reconnect_delay:.2f}s...")
+                    await asyncio.sleep(reconnect_delay)
+                    reconnect_delay = min(reconnect_delay * 2, max_delay)
 
     async def start(self):
         logger.info(f"🚀 Iniciando Copy Sniper na porta {WS_PORT}")

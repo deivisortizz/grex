@@ -11,6 +11,8 @@ from solders.transaction import VersionedTransaction
 from solders.keypair import Keypair
 import base58
 
+from solana_core import is_rate_limited_error, rate_limit_delay
+
 logger = logging.getLogger("RaydiumMigrator")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 
@@ -165,6 +167,8 @@ class RaydiumMigrator:
         min_delay = 0.25
         max_delay = 10.0
         reconnect_delay = min_delay
+        rate_limit_streak = 0
+        consecutive_errors = 0
         while True:
             has_active_users = any(state.get("config", {}).get("raydium_migrator_active") for state in self.main.user_states.values() if state["is_active"])
             if not has_active_users:
@@ -176,6 +180,8 @@ class RaydiumMigrator:
                     logger.info("📡 Iniciando rastreador oficial de Migração Raydium (Pool Creation)...")
                     await ws.send(json.dumps({"method": "subscribeMigration"}))
                     reconnect_delay = min_delay
+                    rate_limit_streak = 0
+                    consecutive_errors = 0
 
                     async for message in ws:
                         has_active_users = any(state.get("config", {}).get("raydium_migrator_active") for state in self.main.user_states.values() if state["is_active"])
@@ -234,6 +240,16 @@ class RaydiumMigrator:
                                         asyncio.create_task(self.handle_raydium_snipe(user_id, state, mint))
                                         
             except Exception as e:
-                logger.error(f"Erro no WSS Raydium Migrator: {e}. Reconectando em {reconnect_delay:.2f}s...")
-                await asyncio.sleep(reconnect_delay)
-                reconnect_delay = min(reconnect_delay * 2, max_delay)
+                consecutive_errors += 1
+                if is_rate_limited_error(e):
+                    delay = rate_limit_delay(rate_limit_streak)
+                    rate_limit_streak += 1
+                    if consecutive_errors <= 3 or consecutive_errors % 5 == 0:
+                        logger.error(f"⛔ PumpPortal retornou 429 (rate limit) no Raydium Migrator. Aguardando {delay:.0f}s (ocorrência #{consecutive_errors})...")
+                    await asyncio.sleep(delay)
+                else:
+                    rate_limit_streak = 0
+                    if consecutive_errors <= 3 or consecutive_errors % 5 == 0:
+                        logger.error(f"Erro no WSS Raydium Migrator: {e}. Reconectando em {reconnect_delay:.2f}s...")
+                    await asyncio.sleep(reconnect_delay)
+                    reconnect_delay = min(reconnect_delay * 2, max_delay)

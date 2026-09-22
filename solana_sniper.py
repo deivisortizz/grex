@@ -18,7 +18,7 @@ from solders.pubkey import Pubkey
 from solders.keypair import Keypair
 from solders.transaction import VersionedTransaction
 
-from solana_core import SolanaCore
+from solana_core import SolanaCore, is_rate_limited_error, rate_limit_delay
 from raydium_migrator import RaydiumMigrator
 
 load_dotenv()
@@ -458,12 +458,20 @@ class SolanaSniper(SolanaCore):
         max_delay = 10.0
         reconnect_delay = min_delay
 
+        # [FIX] Backoff SEPARADO e bem mais conservador para HTTP 429 (rate limit).
+        # Reconectar em 250ms quando a Helius já está nos rejeitando por excesso de
+        # requisições só martela o servidor com mais handshakes e piora o bloqueio.
+        rate_limit_streak = 0
+        consecutive_errors = 0  # throttling de log: não inunda o log em loop apertado
+
         while True:
             try:
                 async with websockets.connect(wss_url, ping_interval=60, ping_timeout=120) as ws:
                     logger.info(f"Conectado ao WSS Solana: {wss_url.split('?')[0]}***")
                     await ws.send(json.dumps(subscribe_msg))
-                    reconnect_delay = min_delay  # conexão OK: zera o backoff
+                    reconnect_delay = min_delay  # conexão OK: zera os dois backoffs
+                    rate_limit_streak = 0
+                    consecutive_errors = 0
 
                     async for message in ws:
                         data = json.loads(message)
@@ -502,14 +510,28 @@ class SolanaSniper(SolanaCore):
                                     await self.broadcast_to_user(user_id, {"type": "config", **state["config"], "is_active": state["is_active"]})
                                     asyncio.create_task(self.handle_snipe_and_monitor(user_id, state, target_token))
             except Exception as e:
-                logger.error(f"Erro no WSS Solana: {e}. Reconectando em {reconnect_delay:.2f}s...")
-                await asyncio.sleep(reconnect_delay)
-                reconnect_delay = min(reconnect_delay * 2, max_delay)
+                consecutive_errors += 1
+                if is_rate_limited_error(e):
+                    delay = rate_limit_delay(rate_limit_streak)
+                    rate_limit_streak += 1
+                    # Loga sempre nas primeiras falhas, depois só a cada 5ª — evita
+                    # inundar o log se a Helius ficar rejeitando por um bom tempo.
+                    if consecutive_errors <= 3 or consecutive_errors % 5 == 0:
+                        logger.error(f"⛔ Helius retornou 429 (rate limit) no WSS Solana. Aguardando {delay:.0f}s (ocorrência #{consecutive_errors})...")
+                    await asyncio.sleep(delay)
+                else:
+                    rate_limit_streak = 0
+                    if consecutive_errors <= 3 or consecutive_errors % 5 == 0:
+                        logger.error(f"Erro no WSS Solana: {e}. Reconectando em {reconnect_delay:.2f}s...")
+                    await asyncio.sleep(reconnect_delay)
+                    reconnect_delay = min(reconnect_delay * 2, max_delay)
 
     async def pumpportal_migration_loop(self):
         min_delay = 0.25
         max_delay = 10.0
         reconnect_delay = min_delay
+        rate_limit_streak = 0
+        consecutive_errors = 0
         while True:
             has_migration_users = any(state.get("config", {}).get("raydium_migration_filter") for state in self.user_states.values() if state["is_active"] and not state["config"].get("target_token"))
             if not has_migration_users:
@@ -521,6 +543,8 @@ class SolanaSniper(SolanaCore):
                     logger.info("📡 Iniciando rastreador global de pré-migração Raydium...")
                     await ws.send(json.dumps({"method": "subscribeTokenTrade"}))
                     reconnect_delay = min_delay
+                    rate_limit_streak = 0
+                    consecutive_errors = 0
 
                     async for message in ws:
                         has_migration_users = any(state.get("config", {}).get("raydium_migration_filter") for state in self.user_states.values() if state["is_active"] and not state["config"].get("target_token"))
@@ -546,9 +570,19 @@ class SolanaSniper(SolanaCore):
                                                 await self.log_to_user(user_id, "WARN", f"🚀 [RAYDIUM MIGRATION] Token pré-migração detectado! ({v_sol_normalized:.1f} SOL Virtuais)")
                                                 asyncio.create_task(self.handle_snipe_and_monitor(user_id, state, mint))
             except Exception as e:
-                logger.error(f"Erro no WSS PumpPortal (Migration Mode): {e}. Reconectando em {reconnect_delay:.2f}s...")
-                await asyncio.sleep(reconnect_delay)
-                reconnect_delay = min(reconnect_delay * 2, max_delay)
+                consecutive_errors += 1
+                if is_rate_limited_error(e):
+                    delay = rate_limit_delay(rate_limit_streak)
+                    rate_limit_streak += 1
+                    if consecutive_errors <= 3 or consecutive_errors % 5 == 0:
+                        logger.error(f"⛔ PumpPortal retornou 429 (rate limit). Aguardando {delay:.0f}s (ocorrência #{consecutive_errors})...")
+                    await asyncio.sleep(delay)
+                else:
+                    rate_limit_streak = 0
+                    if consecutive_errors <= 3 or consecutive_errors % 5 == 0:
+                        logger.error(f"Erro no WSS PumpPortal (Migration Mode): {e}. Reconectando em {reconnect_delay:.2f}s...")
+                    await asyncio.sleep(reconnect_delay)
+                    reconnect_delay = min(reconnect_delay * 2, max_delay)
 
     async def start(self):
         logger.info(f"🚀 Iniciando Solana Sniper na porta {WS_PORT}")

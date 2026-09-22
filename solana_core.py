@@ -24,6 +24,38 @@ DATA_DIR = os.getenv('DATA_DIR', os.path.join(os.path.dirname(os.path.abspath(__
 JWT_SECRET = os.getenv("JWT_SECRET", "multi-tenant-super-secret-fallback")
 JWT_ALGORITHM = "HS256"
 
+# [FIX] Backoff dedicado para HTTP 429 (rate limit) no handshake de WSS.
+# Usado por solana_sniper.py, copy_sniper.py e raydium_migrator.py — todos os
+# loops que abrem websockets.connect() para Helius/PumpPortal. Um 429 é o
+# provedor pedindo EXPLICITAMENTE pra desacelerar; reconectar rápido (como no
+# backoff normal de queda de conexão) só piora o rate limit. Por isso este
+# schedule é bem mais conservador e não reaproveita o backoff "rápido".
+RATE_LIMIT_BACKOFF_SCHEDULE = [5.0, 10.0, 30.0, 60.0]
+
+
+def is_rate_limited_error(exc):
+    """Detecta se uma exceção de handshake de WebSocket é um HTTP 429."""
+    try:
+        import websockets.exceptions as ws_exc
+        if isinstance(exc, getattr(ws_exc, "InvalidStatus", ())):
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+            if status == 429:
+                return True
+        if isinstance(exc, getattr(ws_exc, "InvalidStatusCode", ())):
+            if getattr(exc, "status_code", None) == 429:
+                return True
+    except Exception:
+        pass
+    return "429" in str(exc)
+
+
+def rate_limit_delay(streak):
+    """Retorna o próximo intervalo de espera (em segundos) para uma sequência
+    de 'streak' erros 429 consecutivos, seguindo RATE_LIMIT_BACKOFF_SCHEDULE."""
+    idx = min(streak, len(RATE_LIMIT_BACKOFF_SCHEDULE) - 1)
+    return RATE_LIMIT_BACKOFF_SCHEDULE[idx]
+
+
 class SolanaCore:
     def __init__(self, history_table="solana_sniper_history", logger_name="SolanaCore"):
         self.history_table = history_table
