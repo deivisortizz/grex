@@ -353,7 +353,7 @@ class SolanaSniper(SolanaCore):
                 
         return True, "Crescimento estável validado."
 
-    async def handle_snipe_and_monitor(self, user_id, state, target_token):
+    async def handle_snipe_and_monitor(self, user_id, state, target_token, force_entry=False):
         # [FIX] Toda a função roda dentro de um try/except: como é sempre disparada via
         # asyncio.create_task (fire-and-forget), uma exceção não tratada aqui travaria o
         # "status" do usuário em "sniping" para sempre (sniper órfão, sem crash visível e
@@ -368,7 +368,10 @@ class SolanaSniper(SolanaCore):
                         await self.log_to_user(user_id, "WARN", f"🚫 [FILTRO] Token descartado: {msg}")
                         # Retorna para estado watching
                         if state["is_active"]:
-                            state["config"]["status"] = "watching"
+                            if state.get("open_positions"):
+                                state["config"]["status"] = "monitoring_position"
+                            else:
+                                state["config"]["status"] = "watching"
                             await self.broadcast_to_user(user_id, {"type": "config", **state["config"], "is_active": state["is_active"]})
                         return False
                     await self.log_to_user(user_id, "INFO", f"✅ [FILTRO APROVADO] {msg}")
@@ -386,7 +389,10 @@ class SolanaSniper(SolanaCore):
                     if not is_momentum:
                         await self.log_to_user(user_id, "WARN", f"🚫 [FILTRO MOMENTUM] Token descartado: {msg}")
                         if state["is_active"]:
-                            state["config"]["status"] = "watching"
+                            if state.get("open_positions"):
+                                state["config"]["status"] = "monitoring_position"
+                            else:
+                                state["config"]["status"] = "watching"
                             await self.broadcast_to_user(user_id, {"type": "config", **state["config"], "is_active": state["is_active"]})
                         return False
                     await self.log_to_user(user_id, "INFO", f"✅ [MOMENTUM APROVADO] {msg}")
@@ -411,14 +417,21 @@ class SolanaSniper(SolanaCore):
                     await self.log_to_user(user_id, "WARN", "⚠️ A compra falhou ou foi abortada. Recuperando fôlego (3s)...")
                     await asyncio.sleep(3)
                     if state["is_active"]:
-                        state["config"]["status"] = "watching"
-                        await self.log_to_user(user_id, "INFO", "🔄 Sistema recuperado: Retornando ao modo de escuta para novos lançamentos.")
+                        if state.get("open_positions"):
+                            state["config"]["status"] = "monitoring_position"
+                            await self.log_to_user(user_id, "INFO", "🔄 Sistema recuperado: Retornando ao monitoramento de posições abertas.")
+                        else:
+                            state["config"]["status"] = "watching"
+                            await self.log_to_user(user_id, "INFO", "🔄 Sistema recuperado: Retornando ao modo de escuta para novos lançamentos.")
                         await self.broadcast_to_user(user_id, {"type": "config", **state["config"], "is_active": state["is_active"]})
         except Exception as e:
             logger.error(f"Falha crítica não tratada em handle_snipe_and_monitor ({target_token}): {e}")
             self.logger.error(traceback.format_exc())
             if state.get("is_active") and target_token not in state.get("open_positions", {}):
-                state["config"]["status"] = "watching"
+                if state.get("open_positions"):
+                    state["config"]["status"] = "monitoring_position"
+                else:
+                    state["config"]["status"] = "watching"
                 await self.broadcast_to_user(user_id, {"type": "config", **state["config"], "is_active": state["is_active"]})
 
     async def monitor_loop(self):

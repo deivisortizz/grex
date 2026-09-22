@@ -235,37 +235,72 @@ class SolanaCore:
         for client in to_remove:
             self.connected_clients.remove(client)
 
-    async def _get_sol_balance(self, pubkey_str, session, rpc_url):
+    async def _rpc_call_with_retry(self, session, url, payload, max_retries=5, base_delay=0.5, user_id=None):
+        for attempt in range(max_retries):
+            try:
+                async with session.post(url, json=payload) as resp:
+                    if resp.status == 429:
+                        delay = base_delay * (2 ** attempt)
+                        msg = f"⚠️ Helius Rate Limit (429) atingido. Retentando em {delay}s... (Tentativa {attempt+1}/{max_retries})"
+                        if user_id:
+                            await self.log_to_user(user_id, "WARN", msg)
+                        else:
+                            self.logger.warning(msg)
+                        await asyncio.sleep(delay)
+                        continue
+                    
+                    if resp.status != 200:
+                        text = await resp.text()
+                        msg = f"RPC Error {resp.status}: {text}"
+                        if user_id:
+                            await self.log_to_user(user_id, "ERROR", msg)
+                        self.logger.error(msg)
+                        return None
+                        
+                    return await resp.json()
+            except Exception as e:
+                err_str = str(e)
+                if "429" in err_str or "Attempt to decode JSON" in err_str or "Connection reset" in err_str:
+                    delay = base_delay * (2 ** attempt)
+                    msg = f"⚠️ Falha no RPC (Possível 429 ou erro de rede). Retentando em {delay}s... ({err_str})"
+                    if user_id:
+                        await self.log_to_user(user_id, "WARN", msg)
+                    else:
+                        self.logger.warning(msg)
+                    await asyncio.sleep(delay)
+                    continue
+                else:
+                    self.logger.error(f"Erro inesperado no RPC: {e}")
+                    break
+        return None
+
+    async def _get_sol_balance(self, pubkey_str, session, rpc_url, user_id=None):
         payload = {
             "jsonrpc": "2.0",
             "id": 1,
             "method": "getBalance",
             "params": [pubkey_str]
         }
-        try:
-            async with session.post(rpc_url, json=payload) as resp:
-                result = await resp.json()
-                if "result" in result and "value" in result["result"]:
-                    return result["result"]["value"] / 1_000_000_000
-        except Exception:
-            pass
+        result = await self._rpc_call_with_retry(session, rpc_url, payload, user_id=user_id)
+        if result and "result" in result and "value" in result["result"]:
+            return result["result"]["value"] / 1_000_000_000
         return 0.0
 
-    async def _get_token_balance(self, pubkey_str, mint, session, rpc_url):
+    async def _get_token_balance(self, pubkey_str, mint, session, rpc_url, user_id=None):
         payload = {
             "jsonrpc": "2.0", "id": 1,
             "method": "getTokenAccountsByOwner",
             "params": [pubkey_str, {"mint": mint}, {"encoding": "jsonParsed"}]
         }
-        try:
-            async with session.post(rpc_url, json=payload) as resp:
-                result = await resp.json()
-                accounts = result.get("result", {}).get("value", [])
-                if accounts:
+        result = await self._rpc_call_with_retry(session, rpc_url, payload, user_id=user_id)
+        if result and "result" in result and "value" in result["result"]:
+            accounts = result["result"]["value"]
+            if accounts:
+                try:
                     amount = accounts[0]["account"]["data"]["parsed"]["info"]["tokenAmount"]["uiAmount"]
                     return float(amount)
-        except Exception:
-            pass
+                except (KeyError, IndexError, TypeError):
+                    pass
         return 0.0
 
     async def _get_pump_token_price(self, mint, session, rpc_url=None):
@@ -325,19 +360,16 @@ class SolanaCore:
         retries = 0
         while retries < 30:
             await asyncio.sleep(1)
-            try:
-                async with session.post(rpc_url, json=payload) as resp:
-                    result = await resp.json()
-                    status = result.get("result", {}).get("value", [None])[0]
-                    if status is not None:
-                        if status.get("err") is not None:
-                            await self.log_to_user(user_id, "ERROR", f"❌ Transação falhou na rede: {status.get('err')}")
-                            return False
-                        confirmation_status = status.get("confirmationStatus")
-                        if confirmation_status in ["confirmed", "finalized"]:
-                            return True
-            except Exception:
-                pass
+            result = await self._rpc_call_with_retry(session, rpc_url, payload, user_id=user_id, max_retries=2, base_delay=0.5)
+            if result:
+                status = result.get("result", {}).get("value", [None])[0]
+                if status is not None:
+                    if status.get("err") is not None:
+                        await self.log_to_user(user_id, "ERROR", f"❌ Transação falhou na rede: {status.get('err')}")
+                        return False
+                    confirmation_status = status.get("confirmationStatus")
+                    if confirmation_status in ["confirmed", "finalized"]:
+                        return True
             retries += 1
             
         await self.log_to_user(user_id, "WARN", "Tempo esgotado aguardando confirmação via signature status.")
@@ -586,6 +618,7 @@ class SolanaCore:
 
                 elif data.get("type") == "force_buy":
                     token_to_buy = data.get("token")
+                    force_entry = data.get("force_entry", True)
                     if not token_to_buy:
                         await self.log_to_user(user_id, "ERROR", "Nenhum token fornecido para compra manual.")
                         continue
@@ -596,7 +629,7 @@ class SolanaCore:
                     
                     await self.log_to_user(user_id, "WARN", f"⚡ Invocando COMPRA MANUAL para o token: {token_to_buy}")
                     if hasattr(self, 'handle_snipe_and_monitor'):
-                        asyncio.create_task(self.handle_snipe_and_monitor(user_id, state, token_to_buy))
+                        asyncio.create_task(self.handle_snipe_and_monitor(user_id, state, token_to_buy, force_entry=force_entry))
 
                 elif data.get("type") == "force_sell":
                     token_to_sell = data.get("token")
@@ -670,8 +703,16 @@ class SolanaCore:
             rpc_url = os.getenv("SOLANA_RPC_URL", "https://mainnet.helius-rpc.com/?api-key=afef48e6-b88a-49e6-84c4-9b408156ee55")
             async with aiohttp.ClientSession() as session:
                 payer_pubkey_str = str(payer.pubkey())
-                balance_before = await self._get_sol_balance(payer_pubkey_str, session, rpc_url)
+                balance_before = await self._get_sol_balance(payer_pubkey_str, session, rpc_url, user_id=user_id)
                 await self.log_to_user(user_id, "INFO", f"💳 Saldo inicial antes da venda: {balance_before:.5f} SOL")
+                
+                token_balance = await self._get_token_balance(payer_pubkey_str, token_mint, session, rpc_url, user_id=user_id)
+                await self.log_to_user(user_id, "INFO", f"🪙 Saldo de tokens antes da venda: {token_balance:.2f} {token_mint[:4]}")
+                if token_balance <= 0:
+                    await self.log_to_user(user_id, "ERROR", f"❌ Saldo insuficiente do token {token_mint} na carteira. Venda cancelada.")
+                    if token_mint in state.get("open_positions", {}):
+                        state["open_positions"][token_mint]["sell_pending"] = False
+                    return False
                 
                 async with session.post("https://pumpportal.fun/api/trade-local", json=payload) as response:
                     if response.status != 200:
@@ -702,9 +743,8 @@ class SolanaCore:
                     ]
                 }
                 
-                async with session.post(rpc_url, json=rpc_payload) as rpc_resp:
-                    rpc_result = await rpc_resp.json()
-                    if "result" in rpc_result:
+                rpc_result = await self._rpc_call_with_retry(session, rpc_url, rpc_payload, user_id=user_id, max_retries=5)
+                if rpc_result and "result" in rpc_result:
                         tx_sig = rpc_result["result"]
                         await self.log_to_user(user_id, "INFO", f"✅ Venda disparada! TX: {tx_sig}")
                         
@@ -720,7 +760,7 @@ class SolanaCore:
                             return True
 
                         await asyncio.sleep(2)
-                        balance_after = await self._get_sol_balance(payer_pubkey_str, session, rpc_url)
+                        balance_after = await self._get_sol_balance(payer_pubkey_str, session, rpc_url, user_id=user_id)
                         sol_received = balance_after - balance_before
                         
                         if sol_received <= 0:
