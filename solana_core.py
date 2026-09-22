@@ -745,83 +745,83 @@ class SolanaCore:
                 
                 rpc_result = await self._rpc_call_with_retry(session, rpc_url, rpc_payload, user_id=user_id, max_retries=5)
                 if rpc_result and "result" in rpc_result:
-                        tx_sig = rpc_result["result"]
-                        await self.log_to_user(user_id, "INFO", f"✅ Venda disparada! TX: {tx_sig}")
+                    tx_sig = rpc_result["result"]
+                    await self.log_to_user(user_id, "INFO", f"✅ Venda disparada! TX: {tx_sig}")
+                    
+                    await self.log_to_user(user_id, "INFO", "⏳ Aguardando confirmação na blockchain (Signature Status)...")
+                    is_confirmed = await self._wait_for_tx_confirmation(tx_sig, session, rpc_url, user_id)
+                    
+                    if not is_confirmed:
+                        await self.log_to_user(user_id, "WARN", "⚠️ [TIMEOUT] A rede demorou para confirmar o status da assinatura. Assumindo fechamento provisório para evitar spam infinito.")
                         
-                        await self.log_to_user(user_id, "INFO", "⏳ Aguardando confirmação na blockchain (Signature Status)...")
-                        is_confirmed = await self._wait_for_tx_confirmation(tx_sig, session, rpc_url, user_id)
-                        
-                        if not is_confirmed:
-                            await self.log_to_user(user_id, "WARN", "⚠️ [TIMEOUT] A rede demorou para confirmar o status da assinatura. Assumindo fechamento provisório para evitar spam infinito.")
-                            
-                        if sell_fraction < 1.0:
-                            if token_mint in state.get("open_positions", {}):
-                                state["open_positions"][token_mint]["sell_pending"] = False
-                            return True
-
-                        await asyncio.sleep(2)
-                        balance_after = await self._get_sol_balance(payer_pubkey_str, session, rpc_url, user_id=user_id)
-                        sol_received = balance_after - balance_before
-                        
-                        if sol_received <= 0:
-                            await self.log_to_user(user_id, "WARN", "⚠️ Venda confirmada, mas o RPC ainda não atualizou o saldo final corretamente. Assumindo fechamento bem-sucedido.")
-                            sol_received = 0.0
-                            
-                        await self.log_to_user(user_id, "INFO", f"💸 Saldo pós-venda: {balance_after:.5f} SOL | Receita calculada: {sol_received:.5f} SOL")
-                        
-                        pos_data = state["open_positions"].get(token_mint, {})
-                        sol_spent = pos_data.get("sol_spent", 0.0)
-                        jito_tip_buy = pos_data.get("jito_tip_buy", 0.0)
-                        
-                        pnl_pct = pos_data.get("pnl_pct", 0.0)
-                        
-                        if sol_spent == 0:
-                            is_win = sol_received > (jito_tip_buy + jito_tip_sol) or pnl_pct > 0
-                        else:
-                            is_win = sol_received > sol_spent or pnl_pct > 0
-                            
-                        sol_price_usd = 150.0
-                        try:
-                            async with session.get("https://api.binance.com/api/v3/ticker/price?symbol=SOLUSDT") as price_resp:
-                                if price_resp.status == 200:
-                                    price_data = await price_resp.json()
-                                    sol_price_usd = float(price_data.get("price", 150.0))
-                        except Exception as e:
-                            self.logger.error(f"Erro ao buscar preço do SOL na Binance: {e}")
-                            
-                        self._save_trade_history(
-                            user_id=user_id,
-                            token_mint=token_mint,
-                            sol_spent=sol_spent,
-                            sol_received=sol_received,
-                            jito_tip_buy=jito_tip_buy,
-                            jito_tip_sell=jito_tip_sol,
-                            is_win=is_win,
-                            sol_price_usd=sol_price_usd
-                        )
-                        
-                        if is_win:
-                            profit_sol = sol_received - sol_spent if sol_received > 0 else (sol_spent * (pnl_pct / 100.0))
-                            await self.broadcast_to_user(user_id, {
-                                "type": "trade_win",
-                                "profit_sol": profit_sol,
-                                "pnl_pct": pnl_pct,
-                                "token_mint": token_mint
-                            })
-                        
-                        if token_mint in state["open_positions"]:
-                            del state["open_positions"][token_mint]
-                            
-                        state["config"]["status"] = "idle"
-                        await self.broadcast_metrics(user_id)
-                        await self.broadcast_history(user_id)
-                        await self.broadcast_positions(user_id)
-                        await self.broadcast_to_user(user_id, {"type": "config", **state["config"], "is_active": state["is_active"]})
+                    if sell_fraction < 1.0:
+                        if token_mint in state.get("open_positions", {}):
+                            state["open_positions"][token_mint]["sell_pending"] = False
                         return True
+
+                    await asyncio.sleep(2)
+                    balance_after = await self._get_sol_balance(payer_pubkey_str, session, rpc_url, user_id=user_id)
+                    sol_received = balance_after - balance_before
+                    
+                    if sol_received <= 0:
+                        await self.log_to_user(user_id, "WARN", "⚠️ Venda confirmada, mas o RPC ainda não atualizou o saldo final corretamente. Assumindo fechamento bem-sucedido.")
+                        sol_received = 0.0
+                        
+                    await self.log_to_user(user_id, "INFO", f"💸 Saldo pós-venda: {balance_after:.5f} SOL | Receita calculada: {sol_received:.5f} SOL")
+                    
+                    pos_data = state["open_positions"].get(token_mint, {})
+                    sol_spent = pos_data.get("sol_spent", 0.0)
+                    jito_tip_buy = pos_data.get("jito_tip_buy", 0.0)
+                    
+                    pnl_pct = pos_data.get("pnl_pct", 0.0)
+                    
+                    if sol_spent == 0:
+                        is_win = sol_received > (jito_tip_buy + jito_tip_sol) or pnl_pct > 0
                     else:
-                        err_msg = rpc_result.get("error", "Erro desconhecido")
-                        await self.log_to_user(user_id, "ERROR", f"A rede recusou a transação de venda: {err_msg}")
-                        return False
+                        is_win = sol_received > sol_spent or pnl_pct > 0
+                        
+                    sol_price_usd = 150.0
+                    try:
+                        async with session.get("https://api.binance.com/api/v3/ticker/price?symbol=SOLUSDT") as price_resp:
+                            if price_resp.status == 200:
+                                price_data = await price_resp.json()
+                                sol_price_usd = float(price_data.get("price", 150.0))
+                    except Exception as e:
+                        self.logger.error(f"Erro ao buscar preço do SOL na Binance: {e}")
+                        
+                    self._save_trade_history(
+                        user_id=user_id,
+                        token_mint=token_mint,
+                        sol_spent=sol_spent,
+                        sol_received=sol_received,
+                        jito_tip_buy=jito_tip_buy,
+                        jito_tip_sell=jito_tip_sol,
+                        is_win=is_win,
+                        sol_price_usd=sol_price_usd
+                    )
+                    
+                    if is_win:
+                        profit_sol = sol_received - sol_spent if sol_received > 0 else (sol_spent * (pnl_pct / 100.0))
+                        await self.broadcast_to_user(user_id, {
+                            "type": "trade_win",
+                            "profit_sol": profit_sol,
+                            "pnl_pct": pnl_pct,
+                            "token_mint": token_mint
+                        })
+                    
+                    if token_mint in state["open_positions"]:
+                        del state["open_positions"][token_mint]
+                        
+                    state["config"]["status"] = "idle"
+                    await self.broadcast_metrics(user_id)
+                    await self.broadcast_history(user_id)
+                    await self.broadcast_positions(user_id)
+                    await self.broadcast_to_user(user_id, {"type": "config", **state["config"], "is_active": state["is_active"]})
+                    return True
+                else:
+                    err_msg = rpc_result.get("error", "Erro desconhecido")
+                    await self.log_to_user(user_id, "ERROR", f"A rede recusou a transação de venda: {err_msg}")
+                    return False
 
         except Exception as e:
             await self.log_to_user(user_id, "ERROR", f"Falha crítica ao executar venda real: {e}")
