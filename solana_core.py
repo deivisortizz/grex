@@ -337,7 +337,7 @@ class SolanaCore:
 
     async def _get_pump_token_price(self, mint, session, rpc_url=None):
         if not rpc_url:
-            rpc_url = os.getenv("SOLANA_RPC_URL", "https://mainnet.helius-rpc.com/?api-key=afef48e6-b88a-49e6-84c4-9b408156ee55")
+            rpc_url = os.getenv("SOLANA_RPC_URL", "https://mainnet.helius-rpc.com/?api-key=eff46054-caa6-4e08-8731-e9abad96e5d2")
         
         try:
             from solders.pubkey import Pubkey
@@ -732,7 +732,7 @@ class SolanaCore:
                 "pool": "pump"
             }
 
-            rpc_url = os.getenv("SOLANA_RPC_URL", "https://mainnet.helius-rpc.com/?api-key=afef48e6-b88a-49e6-84c4-9b408156ee55")
+            rpc_url = os.getenv("SOLANA_RPC_URL", "https://mainnet.helius-rpc.com/?api-key=eff46054-caa6-4e08-8731-e9abad96e5d2")
             async with aiohttp.ClientSession() as session:
                 payer_pubkey_str = str(payer.pubkey())
                 balance_before = await self._get_sol_balance(payer_pubkey_str, session, rpc_url, user_id=user_id)
@@ -884,7 +884,7 @@ class SolanaCore:
             
             buy_amount_sol = float(state["config"].get("trade_amount", 0.005))
 
-            rpc_url = os.getenv("SOLANA_RPC_URL", "https://mainnet.helius-rpc.com/?api-key=afef48e6-b88a-49e6-84c4-9b408156ee55")
+            rpc_url = os.getenv("SOLANA_RPC_URL", "https://mainnet.helius-rpc.com/?api-key=eff46054-caa6-4e08-8731-e9abad96e5d2")
             async with aiohttp.ClientSession() as session:
                 
                 payer_pubkey_str = str(payer.pubkey())
@@ -1099,7 +1099,7 @@ class SolanaCore:
         })
         await self.broadcast_positions(user_id)
         
-        rpc_url = os.getenv("SOLANA_RPC_URL", "https://mainnet.helius-rpc.com/?api-key=afef48e6-b88a-49e6-84c4-9b408156ee55")
+        rpc_url = os.getenv("SOLANA_RPC_URL", "https://mainnet.helius-rpc.com/?api-key=eff46054-caa6-4e08-8731-e9abad96e5d2")
         
         wallet_pk_str = state.get("wallet")
         if wallet_pk_str:

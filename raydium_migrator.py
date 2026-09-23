@@ -43,7 +43,7 @@ class RaydiumMigrator:
             slippage = float(state["config"]["slippage"])
             buy_amount_sol = float(state["config"].get("trade_amount", 0.005))
             
-            rpc_url = os.getenv("SOLANA_RPC_URL", "https://mainnet.helius-rpc.com/?api-key=afef48e6-b88a-49e6-84c4-9b408156ee55")
+            rpc_url = os.getenv("SOLANA_RPC_URL", "https://mainnet.helius-rpc.com/?api-key=eff46054-caa6-4e08-8731-e9abad96e5d2")
 
             async with aiohttp.ClientSession() as session:
                 payer_pubkey_str = str(payer.pubkey())

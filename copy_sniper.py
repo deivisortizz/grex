@@ -165,7 +165,7 @@ class CopySniper(SolanaCore):
                 )
                 return
 
-            rpc_url = os.getenv("SOLANA_RPC_URL", "https://mainnet.helius-rpc.com/?api-key=afef48e6-b88a-49e6-84c4-9b408156ee55")
+            rpc_url = os.getenv("SOLANA_RPC_URL", "https://mainnet.helius-rpc.com/?api-key=eff46054-caa6-4e08-8731-e9abad96e5d2")
 
             # Blacklist automática de criadores continua valendo como rede de
             # segurança mesmo em copy trading (soft-fail: não perder o trade se
@@ -218,8 +218,8 @@ class CopySniper(SolanaCore):
     # Loop principal: assina logsSubscribe de cada carteira rastreada
     # ------------------------------------------------------------------
     async def wallet_watch_loop(self):
-        wss_url = os.getenv("SOLANA_WSS_URL", "wss://mainnet.helius-rpc.com/?api-key=afef48e6-b88a-49e6-84c4-9b408156ee55")
-        rpc_url = os.getenv("SOLANA_RPC_URL", "https://mainnet.helius-rpc.com/?api-key=afef48e6-b88a-49e6-84c4-9b408156ee55")
+        wss_url = os.getenv("SOLANA_WSS_URL", "wss://mainnet.helius-rpc.com/?api-key=eff46054-caa6-4e08-8731-e9abad96e5d2")
+        rpc_url = os.getenv("SOLANA_RPC_URL", "https://mainnet.helius-rpc.com/?api-key=eff46054-caa6-4e08-8731-e9abad96e5d2")
 
         min_delay = 0.25
         max_delay = 10.0

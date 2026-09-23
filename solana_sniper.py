@@ -196,7 +196,7 @@ class SolanaSniper(SolanaCore):
         return 0.0, 0.0
 
     async def _process_new_pool(self, signature):
-        rpc_url = os.getenv("SOLANA_RPC_URL", "https://mainnet.helius-rpc.com/?api-key=afef48e6-b88a-49e6-84c4-9b408156ee55")
+        rpc_url = os.getenv("SOLANA_RPC_URL", "https://mainnet.helius-rpc.com/?api-key=eff46054-caa6-4e08-8731-e9abad96e5d2")
         async with aiohttp.ClientSession() as session:
             mint = await self._fetch_mint_from_tx(signature, session, rpc_url)
             if not mint:
@@ -361,7 +361,7 @@ class SolanaSniper(SolanaCore):
         try:
             # Filtro de Anti-Golpe/Qualidade Apenas no Modo Global (quando target_token na config é vazio)
             if not state["config"].get("target_token"):
-                rpc_url = os.getenv("SOLANA_RPC_URL", "https://mainnet.helius-rpc.com/?api-key=afef48e6-b88a-49e6-84c4-9b408156ee55")
+                rpc_url = os.getenv("SOLANA_RPC_URL", "https://mainnet.helius-rpc.com/?api-key=eff46054-caa6-4e08-8731-e9abad96e5d2")
                 async with aiohttp.ClientSession() as session:
                     is_quality, msg = await self._check_token_quality_for_global(target_token, session, rpc_url, state.get("config", {}))
                     if not is_quality:
@@ -435,7 +435,7 @@ class SolanaSniper(SolanaCore):
                 await self.broadcast_to_user(user_id, {"type": "config", **state["config"], "is_active": state["is_active"]})
 
     async def monitor_loop(self):
-        wss_url = os.getenv("SOLANA_WSS_URL", "wss://mainnet.helius-rpc.com/?api-key=afef48e6-b88a-49e6-84c4-9b408156ee55")
+        wss_url = os.getenv("SOLANA_WSS_URL", "wss://mainnet.helius-rpc.com/?api-key=eff46054-caa6-4e08-8731-e9abad96e5d2")
         pump_fun_program = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"
         
         subscribe_msg = {

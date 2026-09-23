@@ -855,7 +855,7 @@ async def hunt_wallets_endpoint(payload: WalletHunterRequest, user: dict = Depen
     
     try:
         from wallet_hunter import WalletHunter
-        rpc_url = os.getenv("SOLANA_RPC_URL", "https://mainnet.helius-rpc.com/?api-key=afef48e6-b88a-49e6-84c4-9b408156ee55")
+        rpc_url = os.getenv("SOLANA_RPC_URL", "https://mainnet.helius-rpc.com/?api-key=eff46054-caa6-4e08-8731-e9abad96e5d2")
         hunter = WalletHunter(rpc_url)
         res = await hunter.run(mint, user_id)
         if not res or res.get("status") == "error":
