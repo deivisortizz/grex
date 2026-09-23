@@ -9,20 +9,27 @@ export default function AdminDashboard({ token }) {
   
   const [inviteLink, setInviteLink] = useState('')
   const [loadingInvite, setLoadingInvite] = useState(false)
+  const [masterListeningEnabled, setMasterListeningEnabled] = useState(true)
 
   const fetchData = async () => {
     try {
       const headers = { 'Authorization': `Bearer ${token}` }
       
-      const [statsRes, usersRes] = await Promise.all([
+      const [statsRes, usersRes, listeningRes] = await Promise.all([
         fetch('/api/admin/stats', { headers }),
-        fetch('/api/admin/users', { headers })
+        fetch('/api/admin/users', { headers }),
+        fetch('/api/admin/system/listening_status', { headers })
       ])
 
       if (!statsRes.ok || !usersRes.ok) throw new Error('Acesso negado ou erro no servidor')
 
       const statsData = await statsRes.json()
       const usersData = await usersRes.json()
+      
+      if (listeningRes.ok) {
+        const listeningData = await listeningRes.json()
+        setMasterListeningEnabled(listeningData.master_listening_enabled)
+      }
 
       setStats(statsData)
       setUsers(usersData.users || [])
@@ -120,6 +127,27 @@ export default function AdminDashboard({ token }) {
     }
   }
 
+  const handleToggleMasterListening = async () => {
+    try {
+      const res = await fetch('/api/admin/system/listening_toggle', {
+        method: 'POST',
+        headers: { 
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ enabled: !masterListeningEnabled })
+      })
+      if (res.ok) {
+        const data = await res.json()
+        setMasterListeningEnabled(data.master_listening_enabled)
+      } else {
+        alert("Erro ao alterar chave mestra.")
+      }
+    } catch (err) {
+      alert("Erro de conexão ao alterar chave mestra.")
+    }
+  }
+
   if (loading) {
     return <div className="p-8 text-zinc-400">Carregando painel de administração...</div>
   }
@@ -162,6 +190,33 @@ export default function AdminDashboard({ token }) {
             </div>
           </div>
           <p className="text-4xl font-bold text-white relative z-10">{stats.active_users}</p>
+        </div>
+
+        <div className="bg-zinc-900/80 backdrop-blur-xl border border-zinc-800 rounded-2xl p-6 shadow-xl relative overflow-hidden group">
+          <div className="flex items-center justify-between mb-4 relative z-10">
+            <h3 className="text-zinc-400 font-medium tracking-wide">Master Switch (Escuta global)</h3>
+            <div className={`p-2 rounded-lg ${masterListeningEnabled ? 'bg-emerald-500/10' : 'bg-rose-500/10'}`}>
+              <Activity size={20} className={masterListeningEnabled ? "text-emerald-400" : "text-rose-400"} />
+            </div>
+          </div>
+          <div className="relative z-10 flex items-center justify-between">
+            <p className={`text-xl font-bold ${masterListeningEnabled ? 'text-emerald-400' : 'text-rose-400'}`}>
+              {masterListeningEnabled ? 'LIGADO' : 'HIBERNANDO'}
+            </p>
+            <button
+              onClick={handleToggleMasterListening}
+              className={`px-4 py-2 text-sm font-bold rounded-lg transition-colors ${
+                masterListeningEnabled 
+                  ? 'bg-rose-500/20 text-rose-400 hover:bg-rose-500/30' 
+                  : 'bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30'
+              }`}
+            >
+              {masterListeningEnabled ? 'Desligar Escuta' : 'Ligar Escuta'}
+            </button>
+          </div>
+          <p className="text-xs text-zinc-500 mt-3 relative z-10">
+            Desligar fará todos os robôs pausarem e fecharem os WebSockets globais.
+          </p>
         </div>
       </div>
 

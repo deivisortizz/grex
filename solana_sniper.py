@@ -432,17 +432,29 @@ class SolanaSniper(SolanaCore):
                 db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'sniper.db')
                 with sqlite3.connect(db_path) as conn:
                     cursor = conn.cursor()
-                    cursor.execute("SELECT COUNT(*) FROM solana_sniper_configs WHERE is_active = 1")
-                    count = cursor.fetchone()[0]
-                    if count > 0:
-                        any_active = True
+                    
+                    # 1. Verificar a chave mestra global
+                    try:
+                        cursor.execute("SELECT value FROM system_configs WHERE key = 'master_listening_enabled'")
+                        row = cursor.fetchone()
+                        if row and row[0] == "false":
+                            any_active = False
+                        else:
+                            # 2. Se a chave mestra não bloqueou, verificar usuários individuais
+                            cursor.execute("SELECT COUNT(*) FROM solana_sniper_configs WHERE is_active = 1")
+                            count = cursor.fetchone()[0]
+                            if count > 0:
+                                any_active = True
+                    except sqlite3.OperationalError:
+                        # Tabelas podem não existir se o server.py não tiver rodado
+                        pass
             except Exception as e:
                 logger.error(f"Erro ao verificar status ativo no BD: {e}")
                 # Fallback to memory
                 any_active = any(state.get("is_active") for state in self.user_states.values())
             
             if not any_active:
-                logger.info("💤 Nenhum Sniper ativo. Pausando a escuta da Helius por 60s para economizar créditos...")
+                logger.info("💤 Nenhum usuário ativo ou chave mestra desligada. Pausando a escuta da Helius por 60s...")
                 await asyncio.sleep(60)
                 continue
             # --------------------------------------------------

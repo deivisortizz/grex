@@ -1201,8 +1201,19 @@ class SolanaCore:
         
         partial_tp_pct = tp_pct / 2.0
         await self.log_to_user(user_id, "WARN", f"🎯 Alvos definidos: Parcial (+{partial_tp_pct:.1f}%) | Final (+{tp_pct}%) | Stop-Loss (-{sl_pct}%)")
-        
+
         current_price = entry_price_sol
+
+        # [FIX] Trailing stop + timeout de estagnação: antes, toda saída era relativa
+        # SÓ ao preço de entrada. Um token que sobe 65% e desaba de volta pra perto do
+        # breakeven nunca vendia — não bateu o SL (ainda acima da entrada) nem bateu o
+        # TP de novo (o parcial já tinha sido "disparado"). O trailing protege o PICO
+        # já visto, não só a entrada. O timeout evita capital preso numa moeda morta
+        # que nunca sai da zona neutra.
+        TRAILING_STOP_ACTIVATION_PCT = partial_tp_pct  # só arma depois de um lucro que já vale proteger
+        TRAILING_STOP_DROP_PCT = 20.0                  # vende tudo se recuar 20pp do pico
+        MAX_STAGNANT_HOLD_SECONDS = 600.0              # 10min sem sair da zona neutra = força saída
+        MAX_PARTIAL_SELL_ATTEMPTS = 5
 
         # [FIX] Suavização do Stop-Loss: antes, um único tick de preço abaixo do SL
         # disparava a venda de pânico na hora. Num token com dezenas de bots operando
@@ -1212,6 +1223,52 @@ class SolanaCore:
         SL_CONFIRM_TICKS = 3            # fora da carência, exige N leituras seguidas abaixo do SL
         pnl_history = []
         entry_time = datetime.now()
+
+        # [FIX] Vendas com CONFIRMAÇÃO real antes de relaxar qualquer proteção.
+        # Antes, o TP parcial fazia asyncio.create_task(execute_real_sell(...)) e
+        # IMEDIATAMENTE marcava partial_sold=True e movia o SL pro breakeven — sem
+        # esperar a venda confirmar. Numa moeda de mcap baixíssimo, um rug drena a
+        # liquidez em menos de um bloco: a venda podia falhar (slippage estourado)
+        # e a posição ficava "destravada" (SL relaxado) sem o lucro parcial ter
+        # realmente sido bancado, e sem nunca mais tentar de novo (flag travada).
+        async def _confirm_partial_exit():
+            # [FIX] "partial_sell_in_flight" já foi setado de forma SÍNCRONA no ponto
+            # de disparo (antes do create_task) — não aqui dentro. Setar só depois que
+            # a task começa a rodar deixa uma janela de corrida: se dois ticks chegarem
+            # em rajada antes do scheduler dar a primeira fatia de execução pra essa
+            # task, o guard no loop principal ainda leria a flag como False e dispararia
+            # uma SEGUNDA venda parcial duplicada (confirmado escrevendo um teste de
+            # integração que simula ticks em rajada).
+            success = await self.execute_real_sell(user_id, state, target_token, is_panic=False, sell_fraction=0.5)
+            pos = state["open_positions"].get(target_token)
+            if pos is None:
+                return
+            pos["partial_sell_in_flight"] = False
+            if success:
+                pos["partial_sold"] = True
+                pos["sl_relaxed_to_breakeven"] = True
+                await self.log_to_user(user_id, "WARN", "🛡️ Venda parcial CONFIRMADA. Stop-Loss movido para o preço de entrada (0%). Free roll ativado!")
+            else:
+                attempts = pos.get("partial_sell_attempts", 0) + 1
+                pos["partial_sell_attempts"] = attempts
+                if attempts >= MAX_PARTIAL_SELL_ATTEMPTS:
+                    pos["partial_sold"] = True
+                    await self.log_to_user(user_id, "ERROR", f"❌ Venda parcial falhou {attempts}x seguidas. Desistindo do TP parcial — Stop-Loss ORIGINAL (-{sl_pct}%) permanece ativo, sem relaxar.")
+                else:
+                    pos["partial_sell_next_retry_at"] = datetime.now().timestamp() + 3.0
+                    await self.log_to_user(user_id, "WARN", f"⚠️ Venda parcial falhou (tentativa {attempts}/{MAX_PARTIAL_SELL_ATTEMPTS}). Stop-Loss ORIGINAL mantido (não relaxado). Nova tentativa em ~3s.")
+
+        async def _confirm_full_exit(reason: str, is_panic: bool, flag_name: str):
+            # [FIX] flag_name já foi setado de forma SÍNCRONA no ponto de disparo
+            # (mesma razão do _confirm_partial_exit acima) — evita disparo duplicado
+            # em rajada de ticks antes da task rodar sua primeira linha.
+            success = await self.execute_real_sell(user_id, state, target_token, is_panic=is_panic, sell_fraction=1.0)
+            pos = state["open_positions"].get(target_token)
+            if pos is None:
+                return
+            pos[flag_name] = False
+            if not success:
+                await self.log_to_user(user_id, "WARN", f"⚠️ Venda de saída ({reason}) falhou. Tentando novamente na próxima leitura de preço.")
 
         # Fetch metadata from Pump.fun
         metadata = {}
@@ -1348,32 +1405,34 @@ class SolanaCore:
                                 pnl_pct = ((current_price - entry_price_sol) / entry_price_sol) * 100
                             else:
                                 pnl_pct = 0.0
-                            
+
                             if target_token in state["open_positions"]:
                                 state["open_positions"][target_token]["current_price"] = current_price
                                 state["open_positions"][target_token]["pnl_pct"] = pnl_pct
                                 await self.broadcast_positions(user_id)
-                            
+
                             pos_state = state["open_positions"].get(target_token, {})
-                            
-                            if pnl_pct >= partial_tp_pct and not pos_state.get("partial_sold"):
-                                await self.log_to_user(user_id, "INFO", f"💸 [TAKE PROFIT PARCIAL] Preço atingiu +{pnl_pct:.2f}%. Vendendo 50% da posição!")
-                                state["open_positions"][target_token]["partial_sold"] = True
-                                asyncio.create_task(self.execute_real_sell(user_id, state, target_token, is_panic=False, sell_fraction=0.5))
-                                sl_pct = 0.0
-                                await self.log_to_user(user_id, "WARN", f"🛡️ Stop-Loss movido para o preço de entrada (0%). Free roll ativado!")
-                                pnl_history.clear()
+                            if not pos_state:
+                                continue
 
-                            elif pnl_pct >= tp_pct:
-                                await self.log_to_user(user_id, "INFO", f"💰 [TAKE PROFIT FINAL] Preço atingiu +{pnl_pct:.2f}%. Disparando venda automática!")
-                                asyncio.create_task(self.execute_real_sell(user_id, state, target_token, is_panic=False, sell_fraction=1.0))
-                                pnl_history.clear()
+                            # [FIX] Rastreia o PICO de PnL já visto, não só a entrada.
+                            peak_pnl_pct = max(pos_state.get("peak_pnl_pct", pnl_pct), pnl_pct)
+                            pos_state["peak_pnl_pct"] = peak_pnl_pct
+                            drop_from_peak = peak_pnl_pct - pnl_pct
 
-                            elif pnl_pct <= -CATASTROPHIC_SL_PCT:
+                            # SL efetivo: só vira breakeven (0%) DEPOIS que o TP parcial for
+                            # realmente CONFIRMADO — nunca no instante em que é disparado.
+                            effective_sl_pct = 0.0 if pos_state.get("sl_relaxed_to_breakeven") else sl_pct
+
+                            now_dt = datetime.now()
+                            elapsed_total = (now_dt - entry_time).total_seconds()
+
+                            if pnl_pct <= -CATASTROPHIC_SL_PCT and not pos_state.get("catastrophic_sell_in_flight"):
                                 # [FIX] Corte catastrófico — dispara sempre, mesmo durante a carência (rug real)
                                 await self.log_to_user(user_id, "ERROR", f"🛑 [STOP LOSS CATASTRÓFICO] Preço atingiu {pnl_pct:.2f}%. Disparando venda automática (emergência)!")
-                                asyncio.create_task(self.execute_real_sell(user_id, state, target_token, is_panic=True))
-                                
+                                pos_state["catastrophic_sell_in_flight"] = True
+                                asyncio.create_task(_confirm_full_exit("stop loss catastrófico", True, "catastrophic_sell_in_flight"))
+
                                 # Adicionar à Blacklist Automática
                                 try:
                                     async with session.get(f"https://frontend-api.pump.fun/coins/{target_token}", timeout=2.0) as resp:
@@ -1384,33 +1443,66 @@ class SolanaCore:
                                                 self._add_to_blacklist(creator, f"Stop-Loss Catastrófico ({pnl_pct:.2f}%)")
                                 except Exception as e:
                                     self.logger.error(f"Erro ao buscar criador para blacklist: {e}")
-                                    
+
                                 pnl_history.clear()
 
-                            elif pnl_pct <= -sl_pct:
+                            elif (peak_pnl_pct >= TRAILING_STOP_ACTIVATION_PCT and drop_from_peak >= TRAILING_STOP_DROP_PCT
+                                  and not pos_state.get("trailing_sell_in_flight")):
+                                # [FIX] Trailing stop: protege o PICO já visto. Cobre exatamente o
+                                # caso relatado — token sobe 65%, desaba de volta perto do breakeven
+                                # e nunca vendia (não batia SL relativo à entrada, TP parcial já tinha
+                                # "disparado" uma vez). Reage à queda a partir do topo, não à entrada.
+                                await self.log_to_user(user_id, "WARN", f"📉 [TRAILING STOP] Pico de +{peak_pnl_pct:.2f}% recuou para +{pnl_pct:.2f}% (-{drop_from_peak:.1f}pp do topo). Protegendo o lucro visto — vendendo o restante a mercado!")
+                                pos_state["trailing_sell_in_flight"] = True
+                                asyncio.create_task(_confirm_full_exit("trailing stop", True, "trailing_sell_in_flight"))
+                                pnl_history.clear()
+
+                            elif pnl_pct >= tp_pct and not pos_state.get("final_sell_in_flight"):
+                                await self.log_to_user(user_id, "INFO", f"💰 [TAKE PROFIT FINAL] Preço atingiu +{pnl_pct:.2f}%. Disparando venda automática!")
+                                pos_state["final_sell_in_flight"] = True
+                                asyncio.create_task(_confirm_full_exit("take profit final", False, "final_sell_in_flight"))
+                                pnl_history.clear()
+
+                            elif (pnl_pct >= partial_tp_pct and not pos_state.get("partial_sold")
+                                  and not pos_state.get("partial_sell_in_flight")
+                                  and now_dt.timestamp() >= pos_state.get("partial_sell_next_retry_at", 0)):
+                                await self.log_to_user(user_id, "INFO", f"💸 [TAKE PROFIT PARCIAL] Preço atingiu +{pnl_pct:.2f}%. Vendendo 50% da posição!")
+                                pos_state["partial_sell_in_flight"] = True
+                                asyncio.create_task(_confirm_partial_exit())
+                                pnl_history.clear()
+
+                            elif pnl_pct <= -effective_sl_pct:
                                 # [FIX] Fora da carência inicial e só após N leituras seguidas confirmando
                                 # a perda — evita vender no primeiro flicker de preço do bloco zero.
-                                elapsed = (datetime.now() - entry_time).total_seconds()
+                                elapsed = (now_dt - entry_time).total_seconds()
                                 if elapsed < SL_GRACE_PERIOD_SECONDS:
                                     pass  # ainda em carência: só o corte catastrófico acima protege a posição
                                 else:
                                     pnl_history.append(pnl_pct)
                                     if len(pnl_history) > SL_CONFIRM_TICKS:
                                         pnl_history.pop(0)
-                                    if len(pnl_history) >= SL_CONFIRM_TICKS and all(p <= -sl_pct for p in pnl_history):
-                                        pos_state = state["open_positions"].get(target_token, {})
-                                        
+                                    if len(pnl_history) >= SL_CONFIRM_TICKS and all(p <= -effective_sl_pct for p in pnl_history):
                                         if not pos_state.get("partial_sl_executed"):
                                             await self.log_to_user(user_id, "WARN", f"🛑 [STOP LOSS INTELIGENTE] Preço caiu para {pnl_pct:.2f}%. Despejando 50% da posição com baixo slippage para recuperar risco.")
                                             pos_state["partial_sl_executed"] = True
-                                            pos_state["sl_relaxed_limit"] = sl_pct * 1.5
+                                            pos_state["sl_relaxed_limit"] = effective_sl_pct * 1.5
                                             asyncio.create_task(self.execute_real_sell(user_id, state, target_token, is_panic=False, sell_fraction=0.5))
                                             pnl_history.clear()
-                                            
-                                        elif pos_state.get("partial_sl_executed") and pnl_pct <= -pos_state.get("sl_relaxed_limit", sl_pct * 1.5):
+
+                                        elif pos_state.get("partial_sl_executed") and pnl_pct <= -pos_state.get("sl_relaxed_limit", effective_sl_pct * 1.5):
                                             await self.log_to_user(user_id, "ERROR", f"🛑 [LIQUIDAÇÃO TOTAL] Sangria continuou ({pnl_pct:.2f}%). Despejando restante da posição a mercado!")
                                             asyncio.create_task(self.execute_real_sell(user_id, state, target_token, is_panic=True))
                                             pnl_history.clear()
+
+                            elif (elapsed_total >= MAX_STAGNANT_HOLD_SECONDS and pnl_pct < partial_tp_pct
+                                  and not pos_state.get("timeout_sell_in_flight")):
+                                # [FIX] Rede de segurança: posição estagnada há muito tempo na zona
+                                # neutra (nunca bateu TP nem SL) não deve prender capital pra sempre.
+                                await self.log_to_user(user_id, "WARN", f"⏱️ [TIMEOUT] Posição aberta há {elapsed_total/60:.0f}min sem sair da zona neutra (PnL {pnl_pct:.2f}%). Forçando saída.")
+                                pos_state["timeout_sell_in_flight"] = True
+                                asyncio.create_task(_confirm_full_exit("timeout de estagnação", False, "timeout_sell_in_flight"))
+                                pnl_history.clear()
+
                             else:
                                 pnl_history.clear()
                                     

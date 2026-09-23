@@ -237,6 +237,14 @@ def init_db():
             )
         ''')
 
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS system_configs (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            )
+        ''')
+        cursor.execute("INSERT OR IGNORE INTO system_configs (key, value) VALUES ('master_listening_enabled', 'true')")
+
         conn.commit()
 
     # Inicializar trades.db (Bot de Arbitragem CCXT) também, caso server.py inicie antes
@@ -663,6 +671,27 @@ def clear_all_exchanges(db: sqlite3.Connection = Depends(get_db)):
                 pass # Tabela ainda não existe
                 
     return {"status": "success", "message": "Tabela api_keys 100% zerada em todos os bancos."}
+
+@app.get("/api/admin/system/listening_status")
+def get_system_listening_status(current_user = Depends(get_current_admin), db: sqlite3.Connection = Depends(get_db)):
+    cursor = db.cursor()
+    cursor.execute("SELECT value FROM system_configs WHERE key = 'master_listening_enabled'")
+    row = cursor.fetchone()
+    enabled = True
+    if row and row["value"] == "false":
+        enabled = False
+    return {"master_listening_enabled": enabled}
+
+class ToggleListeningReq(BaseModel):
+    enabled: bool
+
+@app.post("/api/admin/system/listening_toggle")
+def toggle_system_listening(req: ToggleListeningReq, current_user = Depends(get_current_admin), db: sqlite3.Connection = Depends(get_db)):
+    cursor = db.cursor()
+    val_str = "true" if req.enabled else "false"
+    cursor.execute("UPDATE system_configs SET value = ? WHERE key = 'master_listening_enabled'", (val_str,))
+    db.commit()
+    return {"msg": "Status mestre alterado", "master_listening_enabled": req.enabled}
 
 @app.post("/api/admin/reset-system")
 def reset_system(current_user = Depends(get_current_admin)):
