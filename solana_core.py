@@ -883,38 +883,49 @@ class SolanaCore:
                 "params": [str(pda), {"encoding": "base64"}]
             }
             
-            async with session.post(rpc_url, json=payload, timeout=2.0) as resp:
-                if resp.status != 200:
-                    return False, f"RPC retornou erro {resp.status}. Dados de liquidez inacessíveis."
+            max_retries = 5
+            for attempt in range(max_retries):
+                async with session.post(rpc_url, json=payload, timeout=2.0) as resp:
+                    if resp.status != 200:
+                        if attempt < max_retries - 1:
+                            await asyncio.sleep(0.3)
+                            continue
+                        return False, f"RPC retornou erro {resp.status}. Dados de liquidez inacessíveis."
+                        
+                    data = await resp.json()
                     
-                data = await resp.json()
-                
-                # 1. Verificar se a conta existe e se os dados essenciais estão completos
-                if "result" not in data or not data["result"]["value"]:
-                    return False, "Payload vazio: A conta de Bonding Curve não existe ou não foi inicializada (Corrompida/Vazia)."
-                
-                b64_data = data["result"]["value"]["data"][0]
-                raw_bytes = base64.b64decode(b64_data)
-                
-                # O payload do Bonding Curve da Pump.fun possui 40+ bytes.
-                if len(raw_bytes) < 40:
-                    return False, f"Payload corrompido: Estrutura de dados muito curta ({len(raw_bytes)} bytes)."
+                    # 1. Verificar se a conta existe e se os dados essenciais estão completos
+                    if "result" not in data or not data["result"]["value"]:
+                        if attempt < max_retries - 1:
+                            await asyncio.sleep(0.3)
+                            continue
+                        return False, "Payload vazio: A conta de Bonding Curve não propagou a tempo no RPC."
                     
-                # Extrair virtualTokenReserves (offset 8) e virtualSolReserves (offset 16)
-                virtual_token_reserves = struct.unpack("<Q", raw_bytes[8:16])[0]
-                virtual_sol_reserves = struct.unpack("<Q", raw_bytes[16:24])[0]
-                
-                # 2. Validar Reservas Virtuais de Tokens
-                if virtual_token_reserves == 0:
-                    return False, "Reservas de tokens zeradas (Liquidez Drenada/Inválida)."
+                    b64_data = data["result"]["value"]["data"][0]
+                    raw_bytes = base64.b64decode(b64_data)
                     
-                # 3. Validar Limite Mínimo de Liquidez (em SOL)
-                v_sol_normalized = virtual_sol_reserves / 1e9
-                
-                if v_sol_normalized < min_liquidity_sol:
-                    return False, f"Liquidez Insuficiente: {v_sol_normalized:.2f} SOL detectados (Mínimo exigido: {min_liquidity_sol:.2f} SOL)."
-                
-                return True, f"Token Saudável (Liquidez: {v_sol_normalized:.2f} SOL / Integridade: OK)."
+                    # O payload do Bonding Curve da Pump.fun possui 40+ bytes.
+                    if len(raw_bytes) < 40:
+                        return False, f"Payload corrompido: Estrutura de dados muito curta ({len(raw_bytes)} bytes)."
+                        
+                    # Extrair virtualTokenReserves (offset 8) e virtualSolReserves (offset 16)
+                    virtual_token_reserves = struct.unpack("<Q", raw_bytes[8:16])[0]
+                    virtual_sol_reserves = struct.unpack("<Q", raw_bytes[16:24])[0]
+                    
+                    # 2. Validar Reservas Virtuais de Tokens
+                    if virtual_token_reserves == 0:
+                        return False, "Reservas de tokens zeradas (Liquidez Drenada/Inválida)."
+                        
+                    # 3. Validar Limite Mínimo de Liquidez (em SOL)
+                    v_sol_normalized = virtual_sol_reserves / 1e9
+                    
+                    if v_sol_normalized < min_liquidity_sol:
+                        return False, f"Liquidez Insuficiente: {v_sol_normalized:.2f} SOL detectados (Mínimo exigido: {min_liquidity_sol:.2f} SOL)."
+                    
+                    return True, f"Token Saudável (Liquidez: {v_sol_normalized:.2f} SOL / Integridade: OK)."
+            
+            return False, "Falha ao validar: Excedido o número máximo de tentativas."
+
                 
         except Exception as e:
             return False, f"Exceção durante a validação pré-compra: {str(e)}"
