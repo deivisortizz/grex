@@ -3,6 +3,12 @@ set -e
 
 echo "🚀 Iniciando stack Grex..."
 
+echo "⚙️ Inicializando Banco de Dados e Chave Mestra (Pre-flight)..."
+# O import do server garante que o init_db() e a geração do .master.key 
+# ocorram de forma totalmente síncrona antes dos outros processos
+python -c "import server"
+echo "✅ Pre-flight concluído."
+
 # Motor de arbitragem em background (não bloqueia o processo principal)
 python arbitrage_bot.py &
 ARB_PID=$!

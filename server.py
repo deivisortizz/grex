@@ -39,7 +39,7 @@ cipher = Fernet(master_key)
 
 def init_db():
     os.makedirs(DATA_DIR, exist_ok=True)
-    with sqlite3.connect(DB_PATH, check_same_thread=False) as conn:
+    with sqlite3.connect(DB_PATH, check_same_thread=False, timeout=15.0) as conn:
         cursor = conn.cursor()
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS users (
@@ -233,7 +233,7 @@ def init_db():
 
     # Inicializar trades.db (Bot de Arbitragem CCXT) também, caso server.py inicie antes
     trades_db_path = os.path.join(DATA_DIR, 'trades.db')
-    with sqlite3.connect(trades_db_path, check_same_thread=False) as conn_trades:
+    with sqlite3.connect(trades_db_path, check_same_thread=False, timeout=15.0) as conn_trades:
         cursor_trades = conn_trades.cursor()
         cursor_trades.execute('''
             CREATE TABLE IF NOT EXISTS history (
