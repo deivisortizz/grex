@@ -465,6 +465,26 @@ class SolanaSniper(SolanaCore):
         consecutive_errors = 0  # throttling de log: não inunda o log em loop apertado
 
         while True:
+            # --- Smart Status Check (Economia de Créditos) ---
+            any_active = False
+            try:
+                with sqlite3.connect(self.db_path) as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT COUNT(*) FROM solana_sniper_configs WHERE is_active = 1")
+                    count = cursor.fetchone()[0]
+                    if count > 0:
+                        any_active = True
+            except Exception as e:
+                logger.error(f"Erro ao verificar status ativo no BD: {e}")
+                # Fallback to memory
+                any_active = any(state.get("is_active") for state in self.user_states.values())
+            
+            if not any_active:
+                logger.info("💤 Nenhum Sniper ativo. Pausando a escuta da Helius por 60s para economizar créditos...")
+                await asyncio.sleep(60)
+                continue
+            # --------------------------------------------------
+
             try:
                 async with websockets.connect(wss_url, ping_interval=60, ping_timeout=120) as ws:
                     logger.info(f"Conectado ao WSS Solana: {wss_url.split('?')[0]}***")
