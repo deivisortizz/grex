@@ -112,7 +112,7 @@ class SolanaCore:
         try:
             with sqlite3.connect(db_path) as conn:
                 cursor = conn.cursor()
-                cursor.execute("SELECT target_token, slippage, jito_tip, tp_pct, sl_pct, is_active, max_positions, hardcore_mode, trade_amount, anti_delay_filter, socials_filter, max_bonding_curve FROM solana_sniper_configs WHERE user_id = ?", (user_id,))
+                cursor.execute("SELECT target_token, slippage, jito_tip, tp_pct, sl_pct, is_active, max_positions, hardcore_mode, trade_amount, anti_delay_filter, socials_filter, max_bonding_curve, min_trade_amount_sol FROM solana_sniper_configs WHERE user_id = ?", (user_id,))
                 config_row = cursor.fetchone()
                 if config_row:
                     new_token = config_row[0]
@@ -142,6 +142,11 @@ class SolanaCore:
                         state["config"]["max_bonding_curve"] = config_row[11]
                     else:
                         state["config"]["max_bonding_curve"] = 20.0
+                        
+                    if len(config_row) > 12 and config_row[12] is not None:
+                        state["config"]["min_trade_amount_sol"] = config_row[12]
+                    else:
+                        state["config"]["min_trade_amount_sol"] = 0.02
 
                     if len(config_row) > 5 and config_row[5] is not None:
                         state["is_active"] = bool(config_row[5])
@@ -949,10 +954,22 @@ class SolanaCore:
 
             await self.log_to_user(user_id, "INFO", f"🔑 Carteira carregada: {payer.pubkey()}")
 
-            jito_tip_sol = float(state["config"]["jito_tip"])
             slippage = float(state["config"]["slippage"])
-            
             buy_amount_sol = float(state["config"].get("trade_amount", 0.005))
+            
+            # --- GESTÃO DE RISCO: Aporte Mínimo e Proteção de Jito Tip ---
+            min_trade_amount_sol = float(state["config"].get("min_trade_amount_sol", 0.02))
+            if buy_amount_sol < min_trade_amount_sol:
+                await self.log_to_user(user_id, "ERROR", f"🛑 COMPRA ABORTADA: Aporte ({buy_amount_sol} SOL) menor que o limite seguro. Mínimo: {min_trade_amount_sol} SOL.")
+                return False
+
+            jito_tip_sol = float(state["config"]["jito_tip"])
+            max_jito_tip_pct = 0.10 # Max 10% do valor da compra
+            max_allowed_tip = buy_amount_sol * max_jito_tip_pct
+            if jito_tip_sol > max_allowed_tip:
+                await self.log_to_user(user_id, "WARN", f"⚠️ Jito Tip ({jito_tip_sol} SOL) excede {max_jito_tip_pct*100}% do aporte de {buy_amount_sol} SOL. Ajustando para {max_allowed_tip:.4f} SOL para proteger capital.")
+                jito_tip_sol = max_allowed_tip
+            # -------------------------------------------------------------
 
             rpc_url = os.getenv("SOLANA_RPC_URL", "https://mainnet.helius-rpc.com/?api-key=eff46054-caa6-4e08-8731-e9abad96e5d2")
             async with aiohttp.ClientSession() as session:

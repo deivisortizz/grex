@@ -7,6 +7,7 @@ export default function SolanaSniperTab({ isActive, sendCommand, onSwitchToCopy 
     const [formData, setFormData] = useState({
       target_token: '',
       trade_amount: 0.05,
+      min_trade_amount_sol: 0.02,
       slippage: 15,
       jito_tip: 0.001,
       tp_pct: 100,
@@ -36,6 +37,7 @@ export default function SolanaSniperTab({ isActive, sendCommand, onSwitchToCopy 
         setFormData({
           target_token: data.target_token || '',
           trade_amount: data.trade_amount || 0.05,
+          min_trade_amount_sol: data.min_trade_amount_sol || 0.02,
           slippage: data.slippage || 15,
           jito_tip: data.jito_tip || 0.001,
           tp_pct: data.tp_pct || 100,
@@ -69,7 +71,7 @@ export default function SolanaSniperTab({ isActive, sendCommand, onSwitchToCopy 
   const handleConfigChange = (e) => {
     const { name, value } = e.target;
     
-    if (['trade_amount', 'slippage', 'jito_tip', 'tp_pct', 'sl_pct'].includes(name)) {
+    if (['trade_amount', 'min_trade_amount_sol', 'slippage', 'jito_tip', 'tp_pct', 'sl_pct'].includes(name)) {
       // Aceita apenas números, ponto e vírgula, e substitui vírgula por ponto
       let sanitized = value.replace(/,/g, '.').replace(/[^0-9.]/g, '');
       
@@ -248,7 +250,7 @@ export default function SolanaSniperTab({ isActive, sendCommand, onSwitchToCopy 
             />
           </div>
 
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <div>
               <label className="block text-xs font-semibold text-zinc-400 mb-2">Buy Amount (SOL)</label>
               <input
@@ -259,6 +261,18 @@ export default function SolanaSniperTab({ isActive, sendCommand, onSwitchToCopy 
                 onChange={handleConfigChange}
                 disabled={isActive}
                 className="w-full bg-black border border-zinc-800 rounded-xl px-4 py-3 text-sm text-cyan-400 focus:outline-none focus:border-cyan-500/50 disabled:opacity-50 font-mono transition-all"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-zinc-400 mb-2">Aporte Mín. (SOL)</label>
+              <input
+                type="text"
+                inputMode="decimal"
+                name="min_trade_amount_sol"
+                value={formData.min_trade_amount_sol}
+                onChange={handleConfigChange}
+                disabled={isActive}
+                className="w-full bg-black border border-zinc-800 rounded-xl px-4 py-3 text-sm text-amber-400 focus:outline-none focus:border-amber-500/50 disabled:opacity-50 font-mono transition-all"
               />
             </div>
             <div>

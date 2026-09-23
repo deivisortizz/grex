@@ -138,6 +138,11 @@ def init_db():
             cursor.execute("ALTER TABLE solana_sniper_configs ADD COLUMN anti_delay_filter BOOLEAN DEFAULT 1")
         except sqlite3.OperationalError:
             pass
+
+        try:
+            cursor.execute("ALTER TABLE solana_sniper_configs ADD COLUMN min_trade_amount_sol REAL DEFAULT 0.02")
+        except sqlite3.OperationalError:
+            pass
             
         try:
             cursor.execute("ALTER TABLE solana_sniper_configs ADD COLUMN trade_amount REAL DEFAULT 0.05")
@@ -301,6 +306,7 @@ class SolanaConfigReq(BaseModel):
     tp_pct: float = Field(default=100.0, ge=0.0)
     sl_pct: float = Field(default=20.0, ge=0.0)
     trade_amount: float = Field(default=0.05, ge=0.0)
+    min_trade_amount_sol: float = Field(default=0.02, ge=0.0)
     max_positions: int = Field(default=1, ge=1)
     hardcore_mode: bool = Field(default=False)
     anti_delay_filter: bool = Field(default=True)
@@ -521,6 +527,7 @@ def get_user_solana_config(current_user = Depends(get_current_user), db: sqlite3
         "tp_pct": 100.0, 
         "sl_pct": 20.0, 
         "trade_amount": 0.005, 
+        "min_trade_amount_sol": 0.02,
         "max_positions": 1, 
         "hardcore_mode": False,
         "anti_delay_filter": True,
@@ -546,6 +553,7 @@ def get_user_solana_config(current_user = Depends(get_current_user), db: sqlite3
             "tp_pct": row["tp_pct"] if "tp_pct" in row_keys and row["tp_pct"] is not None else fallback_config["tp_pct"],
             "sl_pct": row["sl_pct"] if "sl_pct" in row_keys and row["sl_pct"] is not None else fallback_config["sl_pct"],
             "trade_amount": row["trade_amount"] if "trade_amount" in row_keys and row["trade_amount"] is not None else fallback_config["trade_amount"],
+            "min_trade_amount_sol": row["min_trade_amount_sol"] if "min_trade_amount_sol" in row_keys and row["min_trade_amount_sol"] is not None else fallback_config["min_trade_amount_sol"],
             "max_positions": row["max_positions"] if "max_positions" in row_keys and row["max_positions"] is not None else fallback_config["max_positions"],
             "hardcore_mode": bool(row["hardcore_mode"]) if "hardcore_mode" in row_keys and row["hardcore_mode"] is not None else fallback_config["hardcore_mode"],
             "anti_delay_filter": bool(row["anti_delay_filter"]) if "anti_delay_filter" in row_keys and row["anti_delay_filter"] is not None else fallback_config["anti_delay_filter"],
@@ -569,8 +577,8 @@ def save_user_solana_config(req: SolanaConfigReq, current_user = Depends(get_cur
         
     cursor = db.cursor()
     cursor.execute("""
-        INSERT INTO solana_sniper_configs (user_id, target_token, slippage, jito_tip, tp_pct, sl_pct, max_positions, hardcore_mode, trade_amount, anti_delay_filter, socials_filter, max_bonding_curve, raydium_migration_filter, raydium_migrator_active)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO solana_sniper_configs (user_id, target_token, slippage, jito_tip, tp_pct, sl_pct, max_positions, hardcore_mode, trade_amount, min_trade_amount_sol, anti_delay_filter, socials_filter, max_bonding_curve, raydium_migration_filter, raydium_migrator_active)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(user_id) DO UPDATE SET
             target_token = excluded.target_token,
             slippage = excluded.slippage,
@@ -580,12 +588,13 @@ def save_user_solana_config(req: SolanaConfigReq, current_user = Depends(get_cur
             max_positions = excluded.max_positions,
             hardcore_mode = excluded.hardcore_mode,
             trade_amount = excluded.trade_amount,
+            min_trade_amount_sol = excluded.min_trade_amount_sol,
             anti_delay_filter = excluded.anti_delay_filter,
             socials_filter = excluded.socials_filter,
             max_bonding_curve = excluded.max_bonding_curve,
             raydium_migration_filter = excluded.raydium_migration_filter,
             raydium_migrator_active = excluded.raydium_migrator_active
-    """, (current_user["id"], target, req.slippage, req.jito_tip, req.tp_pct, req.sl_pct, req.max_positions, 1 if req.hardcore_mode else 0, req.trade_amount, 1 if req.anti_delay_filter else 0, 1 if req.socials_filter else 0, req.max_bonding_curve, 1 if req.raydium_migration_filter else 0, 1 if req.raydium_migrator_active else 0))
+    """, (current_user["id"], target, req.slippage, req.jito_tip, req.tp_pct, req.sl_pct, req.max_positions, 1 if req.hardcore_mode else 0, req.trade_amount, req.min_trade_amount_sol, 1 if req.anti_delay_filter else 0, 1 if req.socials_filter else 0, req.max_bonding_curve, 1 if req.raydium_migration_filter else 0, 1 if req.raydium_migrator_active else 0))
     db.commit()
     return {"status": "success", "message": "Configuração do Token salva com sucesso!"}
 
