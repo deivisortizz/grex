@@ -860,6 +860,65 @@ class SolanaCore:
             self.logger.error(traceback.format_exc())
             return False
 
+    async def pre_buy_validation(self, mint: str, session: aiohttp.ClientSession, rpc_url: str, min_liquidity_sol: float = 15.0) -> tuple[bool, str]:
+        """
+        [Validação Pré-Compra de Segurança]
+        Verifica a integridade do payload do token e se há liquidez/reservas mínimas
+        antes de enviar a transação para o RPC.
+        """
+        try:
+            from solders.pubkey import Pubkey
+            import base64
+            import struct
+            
+            # Derivar o PDA do Bonding Curve da Pump.fun
+            mint_pk = Pubkey.from_string(mint)
+            program_pk = Pubkey.from_string("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P")
+            pda, _ = Pubkey.find_program_address([b"bonding-curve", bytes(mint_pk)], program_pk)
+            
+            payload = {
+                "jsonrpc": "2.0", 
+                "id": 1,
+                "method": "getAccountInfo",
+                "params": [str(pda), {"encoding": "base64"}]
+            }
+            
+            async with session.post(rpc_url, json=payload, timeout=2.0) as resp:
+                if resp.status != 200:
+                    return False, f"RPC retornou erro {resp.status}. Dados de liquidez inacessíveis."
+                    
+                data = await resp.json()
+                
+                # 1. Verificar se a conta existe e se os dados essenciais estão completos
+                if "result" not in data or not data["result"]["value"]:
+                    return False, "Payload vazio: A conta de Bonding Curve não existe ou não foi inicializada (Corrompida/Vazia)."
+                
+                b64_data = data["result"]["value"]["data"][0]
+                raw_bytes = base64.b64decode(b64_data)
+                
+                # O payload do Bonding Curve da Pump.fun possui 40+ bytes.
+                if len(raw_bytes) < 40:
+                    return False, f"Payload corrompido: Estrutura de dados muito curta ({len(raw_bytes)} bytes)."
+                    
+                # Extrair virtualTokenReserves (offset 8) e virtualSolReserves (offset 16)
+                virtual_token_reserves = struct.unpack("<Q", raw_bytes[8:16])[0]
+                virtual_sol_reserves = struct.unpack("<Q", raw_bytes[16:24])[0]
+                
+                # 2. Validar Reservas Virtuais de Tokens
+                if virtual_token_reserves == 0:
+                    return False, "Reservas de tokens zeradas (Liquidez Drenada/Inválida)."
+                    
+                # 3. Validar Limite Mínimo de Liquidez (em SOL)
+                v_sol_normalized = virtual_sol_reserves / 1e9
+                
+                if v_sol_normalized < min_liquidity_sol:
+                    return False, f"Liquidez Insuficiente: {v_sol_normalized:.2f} SOL detectados (Mínimo exigido: {min_liquidity_sol:.2f} SOL)."
+                
+                return True, f"Token Saudável (Liquidez: {v_sol_normalized:.2f} SOL / Integridade: OK)."
+                
+        except Exception as e:
+            return False, f"Exceção durante a validação pré-compra: {str(e)}"
+
     async def execute_real_snipe(self, user_id, state, token_mint):
         try:
             wallet_pk_str = state.get("wallet")
@@ -887,6 +946,16 @@ class SolanaCore:
             rpc_url = os.getenv("SOLANA_RPC_URL", "https://mainnet.helius-rpc.com/?api-key=eff46054-caa6-4e08-8731-e9abad96e5d2")
             async with aiohttp.ClientSession() as session:
                 
+                # --- VALIDAÇÃO PRÉ-COMPRA ---
+                min_liquidity = state.get("config", {}).get("min_liquidity_sol", 15.0)
+                is_valid, validation_msg = await self.pre_buy_validation(token_mint, session, rpc_url, min_liquidity_sol=min_liquidity)
+                if not is_valid:
+                    await self.log_to_user(user_id, "WARN", f"🛑 COMPRA ABORTADA (PRÉ-CHECK): {validation_msg}")
+                    return False
+                
+                await self.log_to_user(user_id, "INFO", f"✅ [PRÉ-CHECK PASSOU] {validation_msg}")
+                # ----------------------------
+
                 payer_pubkey_str = str(payer.pubkey())
                 
                 balance_task = asyncio.create_task(self._get_sol_balance(payer_pubkey_str, session, rpc_url))
@@ -1235,9 +1304,19 @@ class SolanaCore:
                                     if len(pnl_history) > SL_CONFIRM_TICKS:
                                         pnl_history.pop(0)
                                     if len(pnl_history) >= SL_CONFIRM_TICKS and all(p <= -sl_pct for p in pnl_history):
-                                        await self.log_to_user(user_id, "ERROR", f"🛑 [STOP LOSS] Preço atingiu {pnl_pct:.2f}% em {SL_CONFIRM_TICKS} leituras seguidas. Disparando venda automática!")
-                                        asyncio.create_task(self.execute_real_sell(user_id, state, target_token, is_panic=True))
-
+                                        pos_state = state["open_positions"].get(target_token, {})
+                                        
+                                        if not pos_state.get("partial_sl_executed"):
+                                            await self.log_to_user(user_id, "WARN", f"🛑 [STOP LOSS INTELIGENTE] Preço caiu para {pnl_pct:.2f}%. Despejando 50% da posição com baixo slippage para recuperar risco.")
+                                            pos_state["partial_sl_executed"] = True
+                                            pos_state["sl_relaxed_limit"] = sl_pct * 1.5
+                                            asyncio.create_task(self.execute_real_sell(user_id, state, target_token, is_panic=False, sell_fraction=0.5))
+                                            pnl_history.clear()
+                                            
+                                        elif pos_state.get("partial_sl_executed") and pnl_pct <= -pos_state.get("sl_relaxed_limit", sl_pct * 1.5):
+                                            await self.log_to_user(user_id, "ERROR", f"🛑 [LIQUIDAÇÃO TOTAL] Sangria continuou ({pnl_pct:.2f}%). Despejando restante da posição a mercado!")
+                                            asyncio.create_task(self.execute_real_sell(user_id, state, target_token, is_panic=True))
+                                            pnl_history.clear()
                             else:
                                 pnl_history.clear()
                                     
