@@ -11,13 +11,15 @@ import {
   Shield,
   User,
   Zap,
-  Users
+  Users,
+  Globe2
 } from 'lucide-react'
 
 const navItems = [
   { name: 'Cotações', icon: LineChart },
   { name: 'Analytics', icon: Activity },
   { name: 'Oceano Azul', icon: Waves },
+  { name: 'Pares Exóticos', icon: Globe2, accent: 'amber' },
   { name: 'Base Sniper', icon: Flame, accent: 'orange' },
   { name: 'Solana Sniper', icon: Zap, accent: 'violet' },
   { name: 'Copy Trading', icon: Users, accent: 'cyan' },
@@ -58,6 +60,7 @@ export default function Sidebar({ wsStatus = 'Offline', ping, activeTab, setActi
         {visibleNavItems.map((item) => {
           const Icon = item.icon
           const isOcean = item.name === 'Oceano Azul'
+          const isExotic = item.name === 'Pares Exóticos'
           const isSniper = item.name === 'Base Sniper'
           const isSolana = item.name === 'Solana Sniper'
           const isCopy = item.name === 'Copy Trading'
@@ -70,15 +73,17 @@ export default function Sidebar({ wsStatus = 'Offline', ping, activeTab, setActi
                 activeTab === item.name
                   ? isOcean
                     ? 'bg-blue-500/10 text-white border border-blue-500/30'
-                    : isSniper
-                      ? 'bg-orange-500/10 text-white border border-orange-500/30'
-                      : isSolana
-                        ? 'bg-violet-500/10 text-white border border-violet-500/30'
-                        : isCopy
-                          ? 'bg-cyan-500/10 text-white border border-cyan-500/30'
-                          : isAdminTab
-                            ? 'bg-purple-500/10 text-white border border-purple-500/30'
-                            : 'bg-zinc-800 text-white'
+                    : isExotic
+                      ? 'bg-amber-500/10 text-white border border-amber-500/30'
+                      : isSniper
+                        ? 'bg-orange-500/10 text-white border border-orange-500/30'
+                        : isSolana
+                          ? 'bg-violet-500/10 text-white border border-violet-500/30'
+                          : isCopy
+                            ? 'bg-cyan-500/10 text-white border border-cyan-500/30'
+                            : isAdminTab
+                              ? 'bg-purple-500/10 text-white border border-purple-500/30'
+                              : 'bg-zinc-800 text-white'
                   : 'text-zinc-400 hover:text-white hover:bg-zinc-800/50'
               }`}
             >
@@ -86,17 +91,19 @@ export default function Sidebar({ wsStatus = 'Offline', ping, activeTab, setActi
                 size={18}
                 className={
                   activeTab === item.name
-                    ? isOcean 
-                      ? 'text-blue-400' 
-                      : isSniper 
-                        ? 'text-orange-400' 
-                        : isSolana 
-                          ? 'text-violet-400' 
-                          : isCopy 
-                            ? 'text-cyan-400' 
-                            : isAdminTab 
-                              ? 'text-purple-400' 
-                              : 'text-emerald-400'
+                    ? isOcean
+                      ? 'text-blue-400'
+                      : isExotic
+                        ? 'text-amber-400'
+                        : isSniper
+                          ? 'text-orange-400'
+                          : isSolana
+                            ? 'text-violet-400'
+                            : isCopy
+                              ? 'text-cyan-400'
+                              : isAdminTab
+                                ? 'text-purple-400'
+                                : 'text-emerald-400'
                     : ''
                 }
               />
@@ -104,6 +111,11 @@ export default function Sidebar({ wsStatus = 'Offline', ping, activeTab, setActi
               {isOcean && (
                 <span className="ml-auto text-[9px] font-bold uppercase tracking-widest text-blue-500/70 bg-blue-500/10 px-1.5 py-0.5 rounded">
                   LIVE
+                </span>
+              )}
+              {isExotic && (
+                <span className="ml-auto text-[9px] font-bold uppercase tracking-widest text-amber-400 bg-amber-500/15 border border-amber-500/30 px-1.5 py-0.5 rounded font-mono">
+                  NOVO
                 </span>
               )}
               {isSniper && (

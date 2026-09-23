@@ -11,6 +11,8 @@ from datetime import datetime
 from dotenv import load_dotenv
 from cryptography.fernet import Fernet
 
+from exotic_arbitrage_engine import ExoticArbitrageEngine
+
 env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
 load_dotenv(dotenv_path=env_path)
 
@@ -26,27 +28,46 @@ logging.basicConfig(
 )
 logger = logging.getLogger('HFT_Engine')
 
+# Exchanges atendidas pelo motor de arbitragem em pares exóticos (Tier-2),
+# separado do motor espacial/triangular Binance<->Bitget já existente.
+EXOTIC_EXCHANGES = {"GATEIO", "MERCADOBITCOIN"}
+
 class MarketDataEngine:
     def __init__(self):
         self.symbol_spatial = 'USDT/BRL'
         self.triangular_symbols = ['USDT/BRL', 'ETH/BRL', 'ETH/USDT']
-        
+
         self.FEE_TAKER = 0.001
         self.TARGET_SPREAD = 0.30
         self.TRADE_AMOUNT_USDT = 11.0
         self.COOLDOWN_SECONDS = 5.0
-        
+
         self.cooldown_until = 0.0
         self.connected_clients = set()
-        
+
         # Flags independentes para cada estratégia
         self.is_spatial_active = False
         self.is_triangular_active = False
-        
+
         self.orderbook_state = {}
-        
+
         self.init_crypto()
         self.init_db()
+
+        # Motor de arbitragem em pares exóticos (Gate.io / Mercado Bitcoin) —
+        # usa o mesmo cofre Fernet e o mesmo trades.db, mas com conectores,
+        # cálculo de net spread via VWAP e persistência de oportunidades
+        # próprios (ver exotic_arbitrage_engine.py).
+        self.exotic_symbols = ['USDT/BRL']
+        self.exotic_engine = ExoticArbitrageEngine(
+            cipher=self.cipher,
+            data_dir=DATA_DIR,
+            symbols=self.exotic_symbols,
+            min_net_spread_pct=0.5,
+            trade_amount_quote=self.TRADE_AMOUNT_USDT,
+        )
+        self.exotic_engine.on_opportunity = self._broadcast_exotic_opportunity
+        self.exotic_engine.is_active = False
 
     def init_crypto(self):
         key_path = os.path.join(DATA_DIR, '.master.key')
@@ -180,6 +201,10 @@ class MarketDataEngine:
         tasks = []
         for row in rows:
             ex_name = row['exchange']
+            if ex_name in EXOTIC_EXCHANGES:
+                # Atendidas pelo motor exótico dedicado (boot_exotic_exchanges_from_db),
+                # não pelo motor espacial/triangular genérico.
+                continue
             apikey = self.decrypt_val(row['key_encrypted'])
             secret = self.decrypt_val(row['secret_encrypted'])
             password = self.decrypt_val(row['password_encrypted'])
@@ -210,8 +235,39 @@ class MarketDataEngine:
                 logger.info(f"🟢 [COFRE] Instância da {ex_name} carregada e adicionada.")
             except Exception as e:
                 logger.error(f"Erro ao instanciar corretora {ex_name} do banco: {e}")
-                
+
         return tasks
+
+    async def boot_exotic_exchanges_from_db(self):
+        """Carrega credenciais salvas para Gate.io / Mercado Bitcoin e as
+        registra no motor de arbitragem exótica (exotic_arbitrage_engine.py)."""
+        rows = await asyncio.to_thread(self._sync_get_all_keys)
+        for row in rows:
+            ex_name = row['exchange']
+            if ex_name not in EXOTIC_EXCHANGES:
+                continue
+            try:
+                self.exotic_engine.add_exchange(ex_name, encrypted_row=row)
+            except Exception as e:
+                logger.error(f"Erro ao instanciar exchange exótica {ex_name} do banco: {e}")
+
+    async def _broadcast_exotic_opportunity(self, evaluation, status):
+        """Callback chamado pelo ExoticArbitrageEngine a cada oportunidade
+        avaliada (executada ou descartada) — repassa pro front-end ao vivo."""
+        await self.broadcast_raw({
+            "type": "exotic_opportunity",
+            "data": {
+                "symbol": evaluation.symbol,
+                "buy_exchange": evaluation.buy_exchange,
+                "sell_exchange": evaluation.sell_exchange,
+                "amount_quote": evaluation.amount_quote,
+                "gross_spread_pct": round(evaluation.vwap_gross_pct, 4),
+                "net_spread_pct": round(evaluation.net_spread_pct, 4),
+                "status": status,
+                "reason": evaluation.reason,
+                "timestamp": datetime.now().isoformat(),
+            }
+        })
 
     async def ws_handler(self, websocket):
         import jwt
@@ -246,14 +302,7 @@ class MarketDataEngine:
         try:
             history = await self.get_trade_history(user_id=getattr(websocket, 'user_id', None))
             await websocket.send(json.dumps({"type": "history", "data": history}))
-            await websocket.send(json.dumps({
-                "type": "config", 
-                "target_spread": self.TARGET_SPREAD, 
-                "trade_amount": self.TRADE_AMOUNT_USDT,
-                "is_spatial_active": self.is_spatial_active,
-                "is_triangular_active": self.is_triangular_active,
-                "exchanges": list(self.orderbook_state.keys()) # Ideally this should be per user too
-            }))
+            await websocket.send(json.dumps(self._config_payload()))
         except websockets.exceptions.ConnectionClosed:
             logger.warning("Cliente desconectou antes do handshake. Ignorando.")
             self.connected_clients.discard(websocket)
@@ -273,15 +322,8 @@ class MarketDataEngine:
                             self.TARGET_SPREAD = float(data["target_spread"])
                         if "trade_amount" in data:
                             self.TRADE_AMOUNT_USDT = float(data["trade_amount"])
-                        await self.broadcast_raw({
-                            "type": "config", 
-                            "target_spread": self.TARGET_SPREAD, 
-                            "trade_amount": self.TRADE_AMOUNT_USDT,
-                            "is_spatial_active": self.is_spatial_active,
-                            "is_triangular_active": self.is_triangular_active,
-                            "exchanges": list(self.orderbook_state.keys())
-                        })
-                        
+                        await self.broadcast_raw(self._config_payload())
+
                     elif mtype == "command":
                         cmd = data.get("command")
                         if cmd == "start_spatial":
@@ -292,6 +334,14 @@ class MarketDataEngine:
                             self.is_triangular_active = True
                         elif cmd == "pause_triangular":
                             self.is_triangular_active = False
+                        elif cmd == "start_exotic":
+                            self.exotic_engine.is_active = True
+                            await self.broadcast_raw(self._config_payload())
+                            continue
+                        elif cmd == "pause_exotic":
+                            self.exotic_engine.is_active = False
+                            await self.broadcast_raw(self._config_payload())
+                            continue
                         elif cmd == "get_history":
                             hist = await self.get_trade_history(user_id=getattr(websocket, 'user_id', None))
                             await websocket.send(json.dumps({"type": "history", "data": hist}))
@@ -322,15 +372,8 @@ class MarketDataEngine:
                                         
                                 except Exception as e:
                                     logger.error(f"Erro ao instanciar corretora {ex_name}: {e}")
-                            
-                            await self.broadcast_raw({
-                                "type": "config", 
-                                "target_spread": self.TARGET_SPREAD, 
-                                "trade_amount": self.TRADE_AMOUNT_USDT,
-                                "is_spatial_active": self.is_spatial_active,
-                                "is_triangular_active": self.is_triangular_active,
-                                "exchanges": list(self.orderbook_state.keys())
-                            })
+
+                            await self.broadcast_raw(self._config_payload())
                             continue
                         elif cmd == "delete_exchange":
                             ex_name = data.get("exchange", "").upper()
@@ -343,25 +386,51 @@ class MarketDataEngine:
                                     if inst:
                                         asyncio.create_task(inst.close())
                                     del self.orderbook_state[ex_name]
-                                
-                                await self.broadcast_raw({
-                                    "type": "config", 
-                                    "target_spread": self.TARGET_SPREAD, 
-                                    "trade_amount": self.TRADE_AMOUNT_USDT,
-                                    "is_spatial_active": self.is_spatial_active,
-                                    "is_triangular_active": self.is_triangular_active,
-                                    "exchanges": list(self.orderbook_state.keys())
-                                })
+
+                                await self.broadcast_raw(self._config_payload())
+                            continue
+                        elif cmd == "add_exotic_exchange":
+                            ex_name = data.get("exchange", "").upper()
+                            creds = data.get("credentials", {})
+                            user_id = getattr(websocket, 'user_id', None)
+                            if ex_name not in EXOTIC_EXCHANGES:
+                                logger.error(f"Exchange exótica '{ex_name}' não suportada. Use: {sorted(EXOTIC_EXCHANGES)}")
+                            elif ex_name in self.exotic_engine.connectors:
+                                pass  # já conectada
+                            else:
+                                try:
+                                    apikey = creds.get("apiKey", "")
+                                    secret = creds.get("secret", "")
+                                    password = creds.get("password", "")
+                                    await asyncio.to_thread(self._sync_save_api_key, ex_name, apikey, secret, password, user_id)
+
+                                    # add_exchange espera credenciais já encriptadas (formato do cofre)
+                                    # OU None para acesso público; aqui chegam em texto plano vindas do
+                                    # formulário, então encriptamos na hora reaproveitando o mesmo cipher.
+                                    encrypted_row = None
+                                    if apikey and secret:
+                                        encrypted_row = {
+                                            "key_encrypted": self.encrypt_val(apikey),
+                                            "secret_encrypted": self.encrypt_val(secret),
+                                            "password_encrypted": self.encrypt_val(password) if password else "",
+                                        }
+                                    self.exotic_engine.add_exchange(ex_name, encrypted_row=encrypted_row)
+                                    logger.info(f"🟢 [COFRE EXÓTICO] Exchange '{ex_name}' registrada.")
+                                except Exception as e:
+                                    logger.error(f"Erro ao instanciar exchange exótica {ex_name}: {e}")
+
+                            await self.broadcast_raw(self._config_payload())
+                            continue
+                        elif cmd == "delete_exotic_exchange":
+                            ex_name = data.get("exchange", "").upper()
+                            user_id = getattr(websocket, 'user_id', None)
+                            if ex_name and user_id:
+                                await asyncio.to_thread(self._sync_delete_api_key, ex_name, user_id)
+                                await self.exotic_engine.remove_exchange(ex_name)
+                                await self.broadcast_raw(self._config_payload())
                             continue
 
-                        await self.broadcast_raw({
-                            "type": "config", 
-                            "target_spread": self.TARGET_SPREAD, 
-                            "trade_amount": self.TRADE_AMOUNT_USDT,
-                            "is_spatial_active": self.is_spatial_active,
-                            "is_triangular_active": self.is_triangular_active,
-                            "exchanges": list(self.orderbook_state.keys())
-                        })
+                        await self.broadcast_raw(self._config_payload())
                 except Exception as e:
                     logger.error(f"WS Error: {e}")
         except websockets.exceptions.ConnectionClosed:
@@ -384,6 +453,21 @@ class MarketDataEngine:
                 await client.send(message)
             except websockets.exceptions.ConnectionClosed:
                 pass
+
+    def _config_payload(self):
+        """Payload único de config, reaproveitado em todo handshake/broadcast
+        pra garantir que o estado do motor exótico nunca fique dessincronizado
+        do resto (antes cada ponto de broadcast duplicava este dict à mão)."""
+        return {
+            "type": "config",
+            "target_spread": self.TARGET_SPREAD,
+            "trade_amount": self.TRADE_AMOUNT_USDT,
+            "is_spatial_active": self.is_spatial_active,
+            "is_triangular_active": self.is_triangular_active,
+            "exchanges": list(self.orderbook_state.keys()),
+            "is_exotic_active": self.exotic_engine.is_active,
+            "exotic_exchanges": list(self.exotic_engine.connectors.keys()),
+        }
 
     async def watch_symbol(self, exchange_name: str, symbol: str):
         exchange_instance = self.orderbook_state[exchange_name]['instance']
@@ -617,12 +701,14 @@ class MarketDataEngine:
     async def run(self):
         logger.info(f"Iniciando Motor HFT - Suporte Dual (Espacial + Triangular)")
         exchange_tasks = await self.boot_exchanges_from_db()
-        
+        await self.boot_exotic_exchanges_from_db()
+
         try:
             tasks = exchange_tasks
             tasks.append(self.start_ws_server())
             tasks.append(self.analyze_spread_loop())
             tasks.append(self.analyze_triangular_loop())
+            tasks.append(self.exotic_engine.run())
             await asyncio.gather(*tasks)
         except asyncio.CancelledError:
             pass
@@ -631,6 +717,7 @@ class MarketDataEngine:
                 inst = state.get('instance')
                 if inst:
                     await inst.close()
+            await self.exotic_engine.shutdown()
 
 async def main():
     engine = MarketDataEngine()

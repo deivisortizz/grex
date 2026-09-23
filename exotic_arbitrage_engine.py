@@ -59,6 +59,19 @@ class ExoticArbitrageEngine:
         self.cooldown_until = defaultdict(float)
         self.is_active = False
 
+        # Callback opcional: async def on_opportunity(evaluation, status).
+        # Permite ao processo que compõe este motor (ex: arbitrage_bot.py)
+        # transmitir cada oportunidade avaliada pro front-end em tempo real,
+        # sem este módulo precisar saber nada sobre WebSocket/broadcast.
+        self.on_opportunity = None
+
+    async def _notify(self, evaluation, status):
+        if self.on_opportunity:
+            try:
+                await self.on_opportunity(evaluation, status)
+            except Exception as e:
+                logger.error(f"Erro no callback on_opportunity: {e}")
+
     # ------------------------------------------------------------------
     # Conectividade
     # ------------------------------------------------------------------
@@ -177,16 +190,19 @@ class ExoticArbitrageEngine:
                 if not evaluation.viable:
                     status = "discarded_thin_book" if not evaluation.depth_ok else "discarded_low_net"
                     asyncio.create_task(self.persistence.record_opportunity(evaluation, status))
+                    asyncio.create_task(self._notify(evaluation, status))
                     continue
 
                 if time.time() < self.cooldown_until[symbol]:
                     asyncio.create_task(self.persistence.record_opportunity(evaluation, "discarded_cooldown"))
+                    asyncio.create_task(self._notify(evaluation, "discarded_cooldown"))
                     continue
 
                 if not self.is_active:
                     # Continua registrando oportunidades viáveis mesmo pausado,
                     # pra dar visibilidade do que teria sido executado.
                     asyncio.create_task(self.persistence.record_opportunity(evaluation, "discarded_paused"))
+                    asyncio.create_task(self._notify(evaluation, "discarded_paused"))
                     continue
 
                 await self._try_execute(evaluation, buy_conn, sell_conn)
@@ -195,6 +211,7 @@ class ExoticArbitrageEngine:
         async with self.risk.reserved(evaluation.symbol, evaluation.amount_quote) as reserved_ok:
             if not reserved_ok:
                 await self.persistence.record_opportunity(evaluation, "discarded_risk_limit")
+                await self._notify(evaluation, "discarded_risk_limit")
                 return
 
             self.cooldown_until[evaluation.symbol] = time.time() + self.cooldown_seconds
@@ -210,10 +227,12 @@ class ExoticArbitrageEngine:
                 await self.persistence.record_opportunity(
                     evaluation, "leg_failure",
                 )
+                await self._notify(evaluation, "leg_failure")
                 return
             except Exception as e:
                 logger.error(f"[{evaluation.symbol}] Erro inesperado na execução: {e}")
                 await self.persistence.record_opportunity(evaluation, "leg_failure")
+                await self._notify(evaluation, "leg_failure")
                 return
 
             net_profit_quote = evaluation.amount_quote * (evaluation.net_spread_pct / 100.0)
@@ -222,6 +241,7 @@ class ExoticArbitrageEngine:
                 evaluation.vwap_gross_pct, net_profit_quote,
             )
             await self.persistence.record_opportunity(evaluation, "executed", executed_trade_id=trade_id)
+            await self._notify(evaluation, "executed")
 
             logger.info(
                 f"[✅ EXECUTADO] {evaluation.symbol} {evaluation.buy_exchange}->{evaluation.sell_exchange} | "

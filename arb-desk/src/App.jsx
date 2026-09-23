@@ -15,6 +15,7 @@ import AdminDashboard from './components/admin/AdminDashboard'
 import AccountSettings from './components/AccountSettings'
 import SolanaDashboard from './components/solana/SolanaDashboard'
 import TradeWinToast from './components/TradeWinToast'
+import ExoticArbitrageTab from './components/ExoticArbitrageTab'
 
 function App() {
   // Controle do menu mobile
@@ -33,10 +34,11 @@ function App() {
   const [wsStatus, setWsStatus] = useState('Conectando...')
   const [ping, setPing] = useState(null)
 
-  const [config, setConfig] = useState({ target_spread: 0.30, trade_amount: 11.0, is_spatial_active: false, is_triangular_active: false, exchanges: [] })
+  const [config, setConfig] = useState({ target_spread: 0.30, trade_amount: 11.0, is_spatial_active: false, is_triangular_active: false, exchanges: [], is_exotic_active: false, exotic_exchanges: [] })
   const [history, setHistory] = useState([])
   const [chartData, setChartData] = useState([])
   const [triangularData, setTriangularData] = useState([])
+  const [exoticOpportunities, setExoticOpportunities] = useState([])
 
   const wsRef = useRef(null)
 
@@ -79,7 +81,9 @@ function App() {
             trade_amount: data.trade_amount,
             is_spatial_active: data.is_spatial_active,
             is_triangular_active: data.is_triangular_active,
-            exchanges: data.exchanges || []
+            exchanges: data.exchanges || [],
+            is_exotic_active: data.is_exotic_active || false,
+            exotic_exchanges: data.exotic_exchanges || []
           })
         } else if (data.type === 'history') {
           setHistory(data.data || [])
@@ -87,6 +91,12 @@ function App() {
           setTriangularData(data.exchanges || [])
         } else if (data.type === 'new_trade') {
           setHistory(prev => [...prev, data.data])
+        } else if (data.type === 'exotic_opportunity') {
+          setExoticOpportunities(prev => {
+            const newData = [...prev, data.data]
+            if (newData.length > 200) return newData.slice(newData.length - 200)
+            return newData
+          })
         } else if (data.type === 'market_data') {
           setMarketData(data)
           if (data.net_spread !== undefined) {
@@ -213,6 +223,7 @@ function App() {
         {activeTab === 'Histórico' && <HistoryTab history={history} sendCommand={sendCommand} />}
         {activeTab === 'Analytics' && <AnalyticsTab chartData={chartData} targetSpread={config.target_spread} history={history} />}
         {activeTab === 'Oceano Azul' && <BlueOceanDesk triangularData={triangularData} isTriangularActive={config.is_triangular_active} sendCommand={sendCommand} />}
+        {activeTab === 'Pares Exóticos' && <ExoticArbitrageTab isExoticActive={config.is_exotic_active} exoticExchanges={config.exotic_exchanges} opportunities={exoticOpportunities} sendCommand={sendCommand} />}
         {activeTab === 'Corretoras' && <ExchangesTab exchanges={config.exchanges} sendCommand={sendCommand} />}
         {activeTab === 'Autobot' && <AutobotTab isSpatialActive={config.is_spatial_active} sendCommand={sendCommand} />}
         {activeTab === 'Base Sniper' && <SniperDashboard />}

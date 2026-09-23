@@ -870,70 +870,97 @@ class SolanaCore:
         [Validação Pré-Compra de Segurança]
         Verifica a integridade do payload do token e se há liquidez/reservas mínimas
         antes de enviar a transação para o RPC.
+
+        [FIX] Esta função estava travando quase 100% das tentativas de snipe em modo
+        Global: fazia até 5 tentativas com timeout de 2s cada (até ~11,5s no caminho
+        crítico) e tratava "conta ainda não propagou no RPC" como FALHA FATAL. Só que
+        isso é exatamente o que acontece em todo snipe de bloco zero — o
+        logsSubscribe da Helius nos avisa do InitializeMint2 antes de outro nó RPC
+        conseguir responder getAccountInfo pra essa mesma conta. O filtro de frescor
+        já existente (_check_token_freshness) já tratava esse cenário como "Modo
+        Tolerante" (segue em frente); esta função fazia o oposto e rodava primeiro,
+        matando a tentativa antes do resto da lógica ser alcançado. Resultado
+        observado em produção: dezenas de tokens detectados, praticamente zero
+        compras executadas, e a única vez que passou, a bonding curve já tinha
+        corrido de 30 para 115 SOL enquanto esperava essa validação responder.
+        Agora: retries rápidos (timeout curto, poucas tentativas) e "conta não
+        encontrada ainda" vira BYPASS tolerante, não abortamento — mantendo só as
+        checagens que indicam um problema real (payload corrompido, reservas
+        zeradas, liquidez abaixo do mínimo em uma conta que EXISTE).
         """
         try:
             from solders.pubkey import Pubkey
             import base64
             import struct
-            
+
             # Derivar o PDA do Bonding Curve da Pump.fun
             mint_pk = Pubkey.from_string(mint)
             program_pk = Pubkey.from_string("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P")
             pda, _ = Pubkey.find_program_address([b"bonding-curve", bytes(mint_pk)], program_pk)
-            
+
             payload = {
-                "jsonrpc": "2.0", 
+                "jsonrpc": "2.0",
                 "id": 1,
                 "method": "getAccountInfo",
                 "params": [str(pda), {"encoding": "base64"}]
             }
-            
-            max_retries = 5
-            for attempt in range(max_retries):
-                async with session.post(rpc_url, json=payload, timeout=2.0) as resp:
-                    if resp.status != 200:
-                        if attempt < max_retries - 1:
-                            await asyncio.sleep(0.3)
-                            continue
-                        return False, f"RPC retornou erro {resp.status}. Dados de liquidez inacessíveis."
-                        
-                    data = await resp.json()
-                    
-                    # 1. Verificar se a conta existe e se os dados essenciais estão completos
-                    if "result" not in data or not data["result"]["value"]:
-                        if attempt < max_retries - 1:
-                            await asyncio.sleep(0.3)
-                            continue
-                        return False, "Payload vazio: A conta de Bonding Curve não propagou a tempo no RPC."
-                    
-                    b64_data = data["result"]["value"]["data"][0]
-                    raw_bytes = base64.b64decode(b64_data)
-                    
-                    # O payload do Bonding Curve da Pump.fun possui 40+ bytes.
-                    if len(raw_bytes) < 40:
-                        return False, f"Payload corrompido: Estrutura de dados muito curta ({len(raw_bytes)} bytes)."
-                        
-                    # Extrair virtualTokenReserves (offset 8) e virtualSolReserves (offset 16)
-                    virtual_token_reserves = struct.unpack("<Q", raw_bytes[8:16])[0]
-                    virtual_sol_reserves = struct.unpack("<Q", raw_bytes[16:24])[0]
-                    
-                    # 2. Validar Reservas Virtuais de Tokens
-                    if virtual_token_reserves == 0:
-                        return False, "Reservas de tokens zeradas (Liquidez Drenada/Inválida)."
-                        
-                    # 3. Validar Limite Mínimo de Liquidez (em SOL)
-                    v_sol_normalized = virtual_sol_reserves / 1e9
-                    
-                    if v_sol_normalized < min_liquidity_sol:
-                        return False, f"Liquidez Insuficiente: {v_sol_normalized:.2f} SOL detectados (Mínimo exigido: {min_liquidity_sol:.2f} SOL)."
-                    
-                    return True, f"Token Saudável (Liquidez: {v_sol_normalized:.2f} SOL / Integridade: OK)."
-            
-            return False, "Falha ao validar: Excedido o número máximo de tentativas."
 
-                
+            max_retries = 2  # [FIX] era 5 — velocidade > tolerância no caminho crítico
+            for attempt in range(max_retries):
+                try:
+                    async with session.post(rpc_url, json=payload, timeout=0.6) as resp:  # [FIX] era 2.0
+                        if resp.status != 200:
+                            if attempt < max_retries - 1:
+                                await asyncio.sleep(0.15)  # [FIX] era 0.3
+                                continue
+                            return True, f"RPC retornou {resp.status} em todas as tentativas — bloco zero, seguindo tolerante."
+
+                        data = await resp.json()
+
+                        # 1. Conta ainda não encontrada no RPC.
+                        # [FIX] Isso NÃO é mais um abortamento fatal — é o sinal normal
+                        # de bloco zero. Tenta mais uma vez rápido; se persistir,
+                        # segue em frente tolerante (igual _check_token_freshness já faz).
+                        if "result" not in data or not data["result"]["value"]:
+                            if attempt < max_retries - 1:
+                                await asyncio.sleep(0.15)
+                                continue
+                            return True, "Bloco zero: conta ainda não propagou no RPC (Modo Tolerante)."
+
+                        b64_data = data["result"]["value"]["data"][0]
+                        raw_bytes = base64.b64decode(b64_data)
+
+                        # O payload do Bonding Curve da Pump.fun possui 40+ bytes.
+                        # Conta EXISTE mas está corrompida — isso sim é um problema real.
+                        if len(raw_bytes) < 40:
+                            return False, f"Payload corrompido: Estrutura de dados muito curta ({len(raw_bytes)} bytes)."
+
+                        # Extrair virtualTokenReserves (offset 8) e virtualSolReserves (offset 16)
+                        virtual_token_reserves = struct.unpack("<Q", raw_bytes[8:16])[0]
+                        virtual_sol_reserves = struct.unpack("<Q", raw_bytes[16:24])[0]
+
+                        # 2. Validar Reservas Virtuais de Tokens
+                        if virtual_token_reserves == 0:
+                            return False, "Reservas de tokens zeradas (Liquidez Drenada/Inválida)."
+
+                        # 3. Validar Limite Mínimo de Liquidez (em SOL)
+                        v_sol_normalized = virtual_sol_reserves / 1e9
+
+                        if v_sol_normalized < min_liquidity_sol:
+                            return False, f"Liquidez Insuficiente: {v_sol_normalized:.2f} SOL detectados (Mínimo exigido: {min_liquidity_sol:.2f} SOL)."
+
+                        return True, f"Token Saudável (Liquidez: {v_sol_normalized:.2f} SOL / Integridade: OK)."
+                except (asyncio.TimeoutError, aiohttp.ClientError):
+                    if attempt < max_retries - 1:
+                        await asyncio.sleep(0.15)
+                        continue
+                    return True, "Timeout de rede na validação — bloco zero, seguindo tolerante."
+
+            return True, "Falha ao validar após retries — seguindo tolerante para não perder a janela de entrada."
+
         except Exception as e:
-            return False, f"Exceção durante a validação pré-compra: {str(e)}"
+            # [FIX] Erro inesperado na validação não deveria travar a compra inteira.
+            return True, f"Bypass por exceção na validação ({e})."
 
     async def execute_real_snipe(self, user_id, state, token_mint):
         try:
