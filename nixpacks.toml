@@ -1,0 +1,29 @@
+[providers]
+node = "18"
+python = "3.10"
+
+[phases.setup]
+# Forçamos a instalação de Node e Python no mesmo ambiente
+nixPkgs = ["python310", "nodejs_18", "gcc"]
+
+[phases.install]
+cmds = [
+    # Instala pacotes do frontend
+    "cd arb-desk && npm install",
+    # Instala pacotes do backend
+    "python -m venv /opt/venv",
+    ". /opt/venv/bin/activate",
+    "pip install -r requirements.txt"
+]
+
+[phases.build]
+cmds = [
+    # Executa o build do Vite
+    "cd arb-desk && npm run build",
+    # Copia a pasta gerada para a raiz (onde o server.py espera encontrar)
+    "cp -r arb-desk/dist ./dist"
+]
+
+[start]
+# Garante que o uvicorn será rodado na porta correta
+cmd = "bash start.sh"

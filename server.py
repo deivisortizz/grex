@@ -811,7 +811,9 @@ def delete_user(id: int, admin = Depends(get_current_admin), db: sqlite3.Connect
     return {"msg": "Usuário removido com sucesso"}
 
 # Monta o diretório de assets se ele existir (gerado pelo Vite)
-assets_path = "dist/assets"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+dist_path = os.path.join(BASE_DIR, "dist")
+assets_path = os.path.join(dist_path, "assets")
 # ----------------------------------------------------------------------------
 # TRACKED WALLETS (COPY TRADING) ENDPOINTS
 # ----------------------------------------------------------------------------
@@ -891,12 +893,12 @@ if os.path.exists(assets_path):
 @app.get("/{full_path:path}")
 async def catch_all(full_path: str):
     # Primeiro verifica se está tentando acessar um arquivo real na pasta dist (ex: favicon.ico, logo.png)
-    file_path = os.path.join("dist", full_path)
+    file_path = os.path.join(dist_path, full_path)
     if os.path.exists(file_path) and os.path.isfile(file_path):
         return FileResponse(file_path)
     
     # Fallback de SPA para o React Router (retorna index.html SEM CACHE)
-    index_path = "dist/index.html"
+    index_path = os.path.join(dist_path, "index.html")
     if os.path.exists(index_path):
         response = FileResponse(index_path)
         # Força o navegador a sempre buscar o index.html atualizado
