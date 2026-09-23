@@ -35,7 +35,9 @@ COPY --from=frontend-builder /frontend/dist ./dist
 RUN chmod +x start.sh
 
 # Expor as portas usadas pelos WebSockets e HTTP
-EXPOSE 8765 8766 8767 3000
+# [FIX] Faltava 8768 (copy_sniper.py) — o processo nem sequer estava sendo
+# iniciado (ver start.sh) nem a porta exposta, por isso o WS nunca respondia.
+EXPOSE 8765 8766 8767 8768 3000
 
 # Entrypoint único para gerenciar a stack completa via start.sh
 CMD ["/bin/bash", "start.sh"]

@@ -18,6 +18,14 @@ python solana_sniper.py &
 SOL_PID=$!
 echo "✅ solana_sniper.py iniciado (PID: $SOL_PID)"
 
+# Copy Sniper (motor de copy trading, porta 8768) em background
+# [FIX] Este processo nunca era iniciado — o módulo existia no código mas
+# jamais rodava no container, por isso o WebSocket da porta 8768 nunca
+# respondia (não havia sequer um processo escutando nela).
+python copy_sniper.py &
+COPY_PID=$!
+echo "✅ copy_sniper.py iniciado (PID: $COPY_PID)"
+
 # Iniciar servidor web FastAPI em foreground (mantém o container ativoo)
 echo "✅ Servidor web (FastAPI) iniciado na porta 3000"
 exec uvicorn server:app --host 0.0.0.0 --port 3000
