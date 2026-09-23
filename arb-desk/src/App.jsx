@@ -50,7 +50,7 @@ function App() {
     }
 
     const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const dynamicWsUrl = `${wsProtocol}//${window.location.hostname}:8767`;
+    const dynamicWsUrl = `${wsProtocol}//${window.location.hostname}:8765`;
     const wsUrl = import.meta.env.VITE_WS_URL || dynamicWsUrl;
     const ws = new WebSocket(wsUrl)
     wsRef.current = ws

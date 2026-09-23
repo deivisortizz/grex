@@ -328,12 +328,20 @@ class MarketDataEngine:
                         cmd = data.get("command")
                         if cmd == "start_spatial":
                             self.is_spatial_active = True
+                            await self.broadcast_raw(self._config_payload())
+                            continue
                         elif cmd == "pause_spatial":
                             self.is_spatial_active = False
+                            await self.broadcast_raw(self._config_payload())
+                            continue
                         elif cmd == "start_triangular":
                             self.is_triangular_active = True
+                            await self.broadcast_raw(self._config_payload())
+                            continue
                         elif cmd == "pause_triangular":
                             self.is_triangular_active = False
+                            await self.broadcast_raw(self._config_payload())
+                            continue
                         elif cmd == "start_exotic":
                             self.exotic_engine.is_active = True
                             await self.broadcast_raw(self._config_payload())
