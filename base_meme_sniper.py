@@ -426,6 +426,27 @@ class BaseMemeSniper:
         }
         
         while True:
+            # --- Smart Status Check (Economia de Créditos / RPC) ---
+            any_active = False
+            try:
+                db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'sniper.db')
+                with sqlite3.connect(db_path) as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT COUNT(*) FROM user_configs WHERE is_active = 1")
+                    count = cursor.fetchone()[0]
+                    if count > 0:
+                        any_active = True
+            except Exception as e:
+                logger.error(f"Erro ao verificar status ativo no BD: {e}")
+                # Fallback to memory
+                any_active = any(state.get('is_active') for state in self.user_states.values())
+            
+            if not any_active:
+                logger.info("💤 Nenhum Sniper ativo na Base. Pausando a escuta por 60s para economizar créditos...")
+                await asyncio.sleep(60)
+                continue
+            # --------------------------------------------------
+
             try:
                 # Conexão WSS direta, evitando as instabilidades de filtros do AsyncWeb3 
                 async with websockets.connect(BASE_WSS_RPC, ping_interval=20, ping_timeout=20) as ws:
