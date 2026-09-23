@@ -1,0 +1,6 @@
+arb-desk/node_modules
+arb-desk/dist
+arb-desk/dist-ssr
+.git
+.env
+data/

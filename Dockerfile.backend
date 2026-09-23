@@ -1,3 +1,27 @@
+# ==========================================
+# STAGE 1: Build do Frontend (React/Vite)
+# ==========================================
+# [FIX] Este Dockerfile builda o backend há muito tempo sem nunca buildar o
+# frontend — não tinha estágio Node nem `npm run build`, então `dist/` nunca
+# existia dentro da imagem e server.py (que serve o React via StaticFiles/
+# catch_all a partir de ./dist) sempre caía no fallback
+# {"error":"Frontend build (dist) not found"...}. Alinhado agora com o
+# Dockerfile multi-stage da raiz, que já fazia isso corretamente.
+# [FIX] node:18 não atende ao engines.node do vite instalado (^8.2.2 exige
+# ^20.19.0 || >=22.12.0) — o build falharia ou quebraria em runtime dentro
+# do próprio `npm run build`. Usa node:20-alpine, igual ao arb-desk/Dockerfile.
+FROM node:20-alpine AS frontend-builder
+WORKDIR /app/frontend
+
+COPY arb-desk/package*.json ./
+RUN npm install
+
+COPY arb-desk/ ./
+RUN npm run build
+
+# ==========================================
+# STAGE 2: Build do Backend (Python/FastAPI)
+# ==========================================
 FROM python:3.10-slim
 
 # Definir o diretório de trabalho
@@ -19,6 +43,10 @@ RUN mkdir -p /app/data && chmod -R 777 /app/data
 
 # Copiar os scripts e código
 COPY . .
+
+# Copia a pasta 'dist' gerada no Stage 1 — é onde server.py espera encontrar
+# o React compilado (StaticFiles em /assets + fallback de SPA no catch_all).
+COPY --from=frontend-builder /app/frontend/dist ./dist
 
 # [FIX] Garante que start.sh seja executável mesmo que o bit +x se perca
 # ao copiar/clonar em algum ambiente (ex: certos exports do Windows/CI).

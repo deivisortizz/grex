@@ -1,7 +1,10 @@
 # ==========================================
 # STAGE 1: Build do Frontend (React/Vite)
 # ==========================================
-FROM node:18-alpine AS frontend-builder
+# [FIX] node:18 não atende ao engines.node do vite instalado (^8.2.2 exige
+# ^20.19.0 || >=22.12.0) — o build falharia ou quebraria em runtime dentro
+# do próprio `npm run build`. Usa node:20-alpine, igual ao arb-desk/Dockerfile.
+FROM node:20-alpine AS frontend-builder
 WORKDIR /app/frontend
 
 # Copia os arquivos de dependência do frontend
