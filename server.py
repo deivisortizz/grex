@@ -243,7 +243,8 @@ def init_db():
                 value TEXT
             )
         ''')
-        cursor.execute("INSERT OR IGNORE INTO system_configs (key, value) VALUES ('master_listening_enabled', 'true')")
+        cursor.execute("INSERT OR IGNORE INTO system_configs (key, value) VALUES ('solana_sniper_enabled', 'true')")
+        cursor.execute("INSERT OR IGNORE INTO system_configs (key, value) VALUES ('base_sniper_enabled', 'true')")
 
         conn.commit()
 
@@ -675,23 +676,35 @@ def clear_all_exchanges(db: sqlite3.Connection = Depends(get_db)):
 @app.get("/api/admin/system/listening_status")
 def get_system_listening_status(current_user = Depends(get_current_admin), db: sqlite3.Connection = Depends(get_db)):
     cursor = db.cursor()
-    cursor.execute("SELECT value FROM system_configs WHERE key = 'master_listening_enabled'")
-    row = cursor.fetchone()
-    enabled = True
-    if row and row["value"] == "false":
-        enabled = False
-    return {"master_listening_enabled": enabled}
+    cursor.execute("SELECT key, value FROM system_configs WHERE key IN ('solana_sniper_enabled', 'base_sniper_enabled')")
+    rows = cursor.fetchall()
+    status = {
+        "solana_sniper_enabled": True,
+        "base_sniper_enabled": True
+    }
+    for row in rows:
+        if row["value"] == "false":
+            status[row["key"]] = False
+    return status
 
 class ToggleListeningReq(BaseModel):
+    key: str
     enabled: bool
 
 @app.post("/api/admin/system/listening_toggle")
 def toggle_system_listening(req: ToggleListeningReq, current_user = Depends(get_current_admin), db: sqlite3.Connection = Depends(get_db)):
+    if req.key not in ["solana_sniper_enabled", "base_sniper_enabled"]:
+        raise HTTPException(status_code=400, detail="Chave inválida.")
+        
     cursor = db.cursor()
     val_str = "true" if req.enabled else "false"
-    cursor.execute("UPDATE system_configs SET value = ? WHERE key = 'master_listening_enabled'", (val_str,))
+    cursor.execute("UPDATE system_configs SET value = ? WHERE key = ?", (val_str, req.key))
+    
+    if cursor.rowcount == 0:
+        cursor.execute("INSERT INTO system_configs (key, value) VALUES (?, ?)", (req.key, val_str))
+        
     db.commit()
-    return {"msg": "Status mestre alterado", "master_listening_enabled": req.enabled}
+    return {"msg": "Status alterado", req.key: req.enabled}
 
 @app.post("/api/admin/reset-system")
 def reset_system(current_user = Depends(get_current_admin)):

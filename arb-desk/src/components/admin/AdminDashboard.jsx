@@ -9,7 +9,10 @@ export default function AdminDashboard({ token }) {
   
   const [inviteLink, setInviteLink] = useState('')
   const [loadingInvite, setLoadingInvite] = useState(false)
-  const [masterListeningEnabled, setMasterListeningEnabled] = useState(true)
+  const [systemStatus, setSystemStatus] = useState({
+    solana_sniper_enabled: true,
+    base_sniper_enabled: true
+  })
 
   const fetchData = async () => {
     try {
@@ -28,7 +31,10 @@ export default function AdminDashboard({ token }) {
       
       if (listeningRes.ok) {
         const listeningData = await listeningRes.json()
-        setMasterListeningEnabled(listeningData.master_listening_enabled)
+        setSystemStatus({
+          solana_sniper_enabled: listeningData.solana_sniper_enabled ?? true,
+          base_sniper_enabled: listeningData.base_sniper_enabled ?? true
+        })
       }
 
       setStats(statsData)
@@ -127,7 +133,8 @@ export default function AdminDashboard({ token }) {
     }
   }
 
-  const handleToggleMasterListening = async () => {
+  const handleToggleListening = async (key) => {
+    const currentState = systemStatus[key];
     try {
       const res = await fetch('/api/admin/system/listening_toggle', {
         method: 'POST',
@@ -135,16 +142,16 @@ export default function AdminDashboard({ token }) {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({ enabled: !masterListeningEnabled })
+        body: JSON.stringify({ key, enabled: !currentState })
       })
       if (res.ok) {
         const data = await res.json()
-        setMasterListeningEnabled(data.master_listening_enabled)
+        setSystemStatus(prev => ({ ...prev, [key]: data[key] }))
       } else {
-        alert("Erro ao alterar chave mestra.")
+        alert("Erro ao alterar chave de escuta.")
       }
     } catch (err) {
-      alert("Erro de conexão ao alterar chave mestra.")
+      alert("Erro de conexão ao alterar chave de escuta.")
     }
   }
 
@@ -194,29 +201,53 @@ export default function AdminDashboard({ token }) {
 
         <div className="bg-zinc-900/80 backdrop-blur-xl border border-zinc-800 rounded-2xl p-6 shadow-xl relative overflow-hidden group">
           <div className="flex items-center justify-between mb-4 relative z-10">
-            <h3 className="text-zinc-400 font-medium tracking-wide">Master Switch (Escuta global)</h3>
-            <div className={`p-2 rounded-lg ${masterListeningEnabled ? 'bg-emerald-500/10' : 'bg-rose-500/10'}`}>
-              <Activity size={20} className={masterListeningEnabled ? "text-emerald-400" : "text-rose-400"} />
+            <h3 className="text-zinc-400 font-medium tracking-wide">Status de Escuta (WebSockets)</h3>
+            <div className="p-2 bg-blue-500/10 rounded-lg">
+              <Activity size={20} className="text-blue-400" />
             </div>
           </div>
-          <div className="relative z-10 flex items-center justify-between">
-            <p className={`text-xl font-bold ${masterListeningEnabled ? 'text-emerald-400' : 'text-rose-400'}`}>
-              {masterListeningEnabled ? 'LIGADO' : 'HIBERNANDO'}
-            </p>
-            <button
-              onClick={handleToggleMasterListening}
-              className={`px-4 py-2 text-sm font-bold rounded-lg transition-colors ${
-                masterListeningEnabled 
-                  ? 'bg-rose-500/20 text-rose-400 hover:bg-rose-500/30' 
-                  : 'bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30'
-              }`}
-            >
-              {masterListeningEnabled ? 'Desligar Escuta' : 'Ligar Escuta'}
-            </button>
+          
+          <div className="space-y-4">
+            {/* Solana Sniper */}
+            <div className="relative z-10 flex items-center justify-between bg-black/20 p-3 rounded-xl border border-zinc-800/50">
+              <div className="flex flex-col">
+                <span className="text-sm text-zinc-300 font-semibold">Rede Solana</span>
+                <span className={`text-xs font-bold ${systemStatus.solana_sniper_enabled ? 'text-emerald-400' : 'text-rose-400'}`}>
+                  {systemStatus.solana_sniper_enabled ? 'LIGADO' : 'HIBERNANDO'}
+                </span>
+              </div>
+              <button
+                onClick={() => handleToggleListening('solana_sniper_enabled')}
+                className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-colors ${
+                  systemStatus.solana_sniper_enabled 
+                    ? 'bg-rose-500/20 text-rose-400 hover:bg-rose-500/30' 
+                    : 'bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30'
+                }`}
+              >
+                {systemStatus.solana_sniper_enabled ? 'Desligar' : 'Ligar'}
+              </button>
+            </div>
+
+            {/* Base Sniper */}
+            <div className="relative z-10 flex items-center justify-between bg-black/20 p-3 rounded-xl border border-zinc-800/50">
+              <div className="flex flex-col">
+                <span className="text-sm text-zinc-300 font-semibold">Rede Base</span>
+                <span className={`text-xs font-bold ${systemStatus.base_sniper_enabled ? 'text-emerald-400' : 'text-rose-400'}`}>
+                  {systemStatus.base_sniper_enabled ? 'LIGADO' : 'HIBERNANDO'}
+                </span>
+              </div>
+              <button
+                onClick={() => handleToggleListening('base_sniper_enabled')}
+                className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-colors ${
+                  systemStatus.base_sniper_enabled 
+                    ? 'bg-rose-500/20 text-rose-400 hover:bg-rose-500/30' 
+                    : 'bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30'
+                }`}
+              >
+                {systemStatus.base_sniper_enabled ? 'Desligar' : 'Ligar'}
+              </button>
+            </div>
           </div>
-          <p className="text-xs text-zinc-500 mt-3 relative z-10">
-            Desligar fará todos os robôs pausarem e fecharem os WebSockets globais.
-          </p>
         </div>
       </div>
 

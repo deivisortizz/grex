@@ -433,9 +433,9 @@ class BaseMemeSniper:
                 with sqlite3.connect(db_path) as conn:
                     cursor = conn.cursor()
                     
-                    # 1. Verificar a chave mestra global
+                    # 1. Verificar a chave global da rede
                     try:
-                        cursor.execute("SELECT value FROM system_configs WHERE key = 'master_listening_enabled'")
+                        cursor.execute("SELECT value FROM system_configs WHERE key = 'base_sniper_enabled'")
                         row = cursor.fetchone()
                         if row and row[0] == "false":
                             any_active = False
@@ -453,7 +453,7 @@ class BaseMemeSniper:
                 any_active = any(state.get('is_active') for state in self.user_states.values())
             
             if not any_active:
-                logger.info("💤 Nenhum usuário ativo ou chave mestra desligada. Pausando a escuta da Base por 60s...")
+                logger.info("💤 Nenhum usuário ativo ou escuta da Base desligada. Pausando a escuta por 60s...")
                 await asyncio.sleep(60)
                 continue
             # --------------------------------------------------
