@@ -1120,29 +1120,29 @@ class SolanaCore:
                             tx_sig = rpc_result["result"]
                             await self.log_to_user(user_id, "INFO", f"✅ Transação de compra disparada! TX: {tx_sig}")
                             self.logger.debug(f"[User {user_id}] Transação enviada com sucesso. Assinatura: {tx_sig}")
-                            
+
                             await self.log_to_user(user_id, "INFO", "⏳ Aguardando confirmação (mudança de saldo)...")
-                        balance_after = await self._wait_for_balance_change(payer_pubkey_str, balance_before, True, session, rpc_url, user_id)
-                        
-                        sol_spent = balance_before - balance_after
-                        if sol_spent <= 0:
-                            await self.log_to_user(user_id, "ERROR", "❌ [FALHA] Saldo inalterado ou timeout da RPC. A transação falhou na rede Solana. Abortando trade fantasma.")
+                            balance_after = await self._wait_for_balance_change(payer_pubkey_str, balance_before, True, session, rpc_url, user_id)
+
+                            sol_spent = balance_before - balance_after
+                            if sol_spent <= 0:
+                                await self.log_to_user(user_id, "ERROR", "❌ [FALHA] Saldo inalterado ou timeout da RPC. A transação falhou na rede Solana. Abortando trade fantasma.")
+                                return False
+
+                            await self.log_to_user(user_id, "INFO", f"💸 Saldo final: {balance_after:.5f} SOL | Custo Real: {sol_spent:.5f} SOL")
+
+                            state["open_positions"][token_mint] = {
+                                "sol_spent": sol_spent,
+                                "buy_amount_sol": buy_amount_sol,
+                                "jito_tip_buy": jito_tip_sol
+                            }
+
+                            return True
+                        else:
+                            err_msg = rpc_result.get("error", "Erro desconhecido")
+                            await self.log_to_user(user_id, "ERROR", f"A rede retornou erro ao enviar a transação de compra: {err_msg}")
+                            self.logger.debug(f"[User {user_id}] Erro da RPC ao enviar transação: {err_msg}")
                             return False
-                            
-                        await self.log_to_user(user_id, "INFO", f"💸 Saldo final: {balance_after:.5f} SOL | Custo Real: {sol_spent:.5f} SOL")
-                        
-                        state["open_positions"][token_mint] = {
-                            "sol_spent": sol_spent,
-                            "buy_amount_sol": buy_amount_sol,
-                            "jito_tip_buy": jito_tip_sol
-                        }
-                        
-                        return True
-                    else:
-                        err_msg = rpc_result.get("error", "Erro desconhecido")
-                        await self.log_to_user(user_id, "ERROR", f"A rede retornou erro ao enviar a transação de compra: {err_msg}")
-                        self.logger.debug(f"[User {user_id}] Erro da RPC ao enviar transação: {err_msg}")
-                        return False
                 except asyncio.TimeoutError:
                     await self.log_to_user(user_id, "ERROR", "Falha Crítica: Timeout (3s) na RPC da Helius ao enviar transação de compra.")
                     return False
