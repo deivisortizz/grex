@@ -590,5 +590,10 @@ class SolanaSniper(SolanaCore):
             )
 
 if __name__ == "__main__":
+    if os.getenv("LOCAL_LISTENER_ENABLED", "true").lower() == "false":
+        logger.info("🛑 [TRAVA DE SEGURANÇA] LOCAL_LISTENER_ENABLED está configurado como 'false' no .env.")
+        logger.info("Desativando a escuta local (Solana) para não conflitar com a produção/economizar RPC.")
+        sys.exit(0)
+        
     sniper = SolanaSniper()
     asyncio.run(sniper.start())
