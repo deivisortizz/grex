@@ -468,7 +468,8 @@ class SolanaSniper(SolanaCore):
             # --- Smart Status Check (Economia de Créditos) ---
             any_active = False
             try:
-                with sqlite3.connect(self.db_path) as conn:
+                db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'sniper.db')
+                with sqlite3.connect(db_path) as conn:
                     cursor = conn.cursor()
                     cursor.execute("SELECT COUNT(*) FROM solana_sniper_configs WHERE is_active = 1")
                     count = cursor.fetchone()[0]
