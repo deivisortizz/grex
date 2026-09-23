@@ -26,6 +26,11 @@ python copy_sniper.py &
 COPY_PID=$!
 echo "✅ copy_sniper.py iniciado (PID: $COPY_PID)"
 
+# CEX Listing Sniper (anúncios de listagem Tier-2/3, porta 8769) em background
+python listing_sniper_service.py &
+LISTING_PID=$!
+echo "✅ listing_sniper_service.py iniciado (PID: $LISTING_PID)"
+
 # Iniciar servidor web FastAPI em foreground (mantém o container ativoo)
 echo "✅ Servidor web (FastAPI) iniciado na porta 3000"
 exec uvicorn server:app --host 0.0.0.0 --port 3000

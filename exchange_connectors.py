@@ -113,9 +113,58 @@ class ExchangeConnector:
                     logger.error(f"[{self.display_name} - {symbol}] Erro no fetch_order_book (polling): {e}")
                 await asyncio.sleep(self.poll_interval_seconds)
 
+    async def stream_ticker(self, symbol: str, fallback_poll_seconds: float = 0.5):
+        """Análogo a stream_order_book, mas pra ticker (último preço) — usado
+        pelo monitor de TP/SL do Listing Sniper, que precisa da menor latência
+        possível pra reagir a um spike-and-dump logo após uma listagem nova."""
+        if getattr(self.ccxt, "has", {}).get("watchTicker") and self.supports_ws_orderbook:
+            while True:
+                try:
+                    ticker = await self.ccxt.watch_ticker(symbol)
+                    yield ticker
+                except ccxt_pro.NetworkError:
+                    await asyncio.sleep(1)
+                except Exception as e:
+                    logger.error(f"[{self.display_name} - {symbol}] Erro no watch_ticker: {e}")
+                    await asyncio.sleep(1)
+        else:
+            while True:
+                try:
+                    ticker = await self.ccxt.fetch_ticker(symbol)
+                    yield ticker
+                except Exception as e:
+                    logger.error(f"[{self.display_name} - {symbol}] Erro no fetch_ticker (polling): {e}")
+                await asyncio.sleep(fallback_poll_seconds)
+
     async def market_buy(self, symbol: str, base_amount: float):
         """`base_amount` é sempre a quantidade da moeda BASE do par (ex: em
         USDT/BRL, base=USDT) — mesma convenção já usada em arbitrage_bot.py."""
+        return await self.ccxt.create_market_buy_order(symbol, base_amount)
+
+    async def market_buy_with_cost(self, symbol: str, cost_quote: float):
+        """Compra `cost_quote` unidades da moeda de COTAÇÃO via ordem a
+        mercado, sem precisar converter pra quantidade de moeda base a partir
+        de um preço que já pode estar obsoleto no instante do disparo — crítico
+        logo após um anúncio de listagem, quando o preço se move violentamente
+        em segundos (uso principal: listing_execution_engine.py).
+
+        Usa o método unificado do ccxt (`createMarketBuyOrderWithCost`) quando
+        a exchange suporta [confirmado via introspecção que MEXC suporta].
+        Só cai pro fallback de estimar a quantidade base pelo último preço se
+        a exchange genuinamente não tiver o método — e nesse caso loga um
+        aviso claro, porque a imprecisão é real."""
+        if self.ccxt.has.get("createMarketBuyOrderWithCost"):
+            return await self.ccxt.create_market_buy_order_with_cost(symbol, cost_quote)
+
+        logger.warning(
+            f"[{self.display_name}] Sem suporte nativo a compra por custo — estimando quantidade "
+            f"base pelo último preço (menos preciso, o preço pode já ter se movido)."
+        )
+        ticker = await self.ccxt.fetch_ticker(symbol)
+        last_price = ticker.get("last") or ticker.get("close")
+        if not last_price or last_price <= 0:
+            raise ValueError(f"Não foi possível obter preço de {symbol} pra estimar a quantidade base.")
+        base_amount = cost_quote / last_price
         return await self.ccxt.create_market_buy_order(symbol, base_amount)
 
     async def market_sell(self, symbol: str, base_amount: float):
@@ -165,6 +214,20 @@ class GateIOConnector(ExchangeConnector):
     withdrawal_fees = {"USDT": 1.0, "BTC": 0.0005, "ETH": 0.003}
 
 
+class MexcConnector(ExchangeConnector):
+    # Confirmado via introspecção do ccxt.pro (id='mexc'): suporta WS
+    # orderbook/ticker e ordens de mercado. Taxa pública taker/maker 0.2%.
+    # Usada também pelo CEX Listing Sniper (listing_execution_engine.py) —
+    # MEXC tem API pública de anúncios (/api/v3/announcements) verificada
+    # ao vivo, útil tanto pra arbitragem quanto pra sniping de listagem.
+    exchange_id = "mexc"
+    display_name = "MEXC"
+    default_taker_fee = 0.002
+    default_maker_fee = 0.002
+    supports_ws_orderbook = True
+    withdrawal_fees = {"USDT": 1.0, "BTC": 0.0002, "ETH": 0.003}
+
+
 class MercadoBitcoinConnector(ExchangeConnector):
     # [IMPORTANTE] O id ccxt é 'mercado' (não 'mercadobitcoin'). Confirmado
     # também que esta exchange NÃO tem suporte a WebSocket em nenhuma versão
@@ -192,6 +255,7 @@ CONNECTOR_REGISTRY = {
     "BITGET": BitgetConnector,
     "GATEIO": GateIOConnector,
     "MERCADOBITCOIN": MercadoBitcoinConnector,
+    "MEXC": MexcConnector,
 }
 
 

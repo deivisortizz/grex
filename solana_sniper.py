@@ -42,58 +42,31 @@ class SolanaSniper(SolanaCore):
         self.migration_triggered = set()
         self.raydium_migrator = RaydiumMigrator(self)
 
-    async def _check_token_freshness(self, mint, session, rpc_url, anti_delay_filter=True, max_bonding_curve=20.0):
-        # Retorna (is_fresh, message)
+    def evaluate_freshness(self, curve: dict, anti_delay_filter: bool = True, max_bonding_curve: float = 20.0):
+        """
+        [FIX] Antes esta função (então _check_token_freshness) fazia sua PRÓPRIA
+        chamada getAccountInfo pra bonding curve — a mesma conta que
+        evaluate_pre_buy também lê, em sequência, no caminho crítico de toda
+        compra. Agora é um avaliador puro (sem I/O): execute_real_snipe lê a
+        conta uma única vez (_read_bonding_curve) e repassa o resultado pra cá
+        e pra evaluate_pre_buy, cortando pela metade as chamadas RPC por snipe.
+        Retorna (is_fresh, message).
+        """
         if not anti_delay_filter:
             return True, "Filtro Anti-Atraso desativado (bypass)."
-        try:
-            from solders.pubkey import Pubkey
-            import base64
-            import struct
-            mint_pk = Pubkey.from_string(mint)
-            program_pk = Pubkey.from_string("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P")
-            pda, _ = Pubkey.find_program_address([b"bonding-curve", bytes(mint_pk)], program_pk)
-            
-            payload = {
-                "jsonrpc": "2.0", "id": 1,
-                "method": "getAccountInfo",
-                "params": [str(pda), {"encoding": "base64"}]
-            }
-            # [FIX] Antes: até 10 tentativas com timeout de 4s + backoff progressivo,
-            # o que podia levar ~50s no pior caso antes de liberar o "Modo Tolerante" —
-            # exatamente quando a RPC costuma travar (muitos bots batendo no mesmo token
-            # no bloco zero). Reduzido para falhar rápido e não perder a janela de entrada.
-            max_retries = 3
-            for attempt in range(max_retries):
-                try:
-                    async with session.post(rpc_url, json=payload, timeout=1.5) as resp:
-                        if resp.status == 200:
-                            data = await resp.json()
-                            if "result" in data and data["result"]["value"]:
-                                b64_data = data["result"]["value"]["data"][0]
-                                raw_bytes = base64.b64decode(b64_data)
-                                if len(raw_bytes) >= 40:
-                                    v_sol = struct.unpack("<Q", raw_bytes[16:24])[0]
-                                    v_sol_normalized = v_sol / 1e9
-                                    # Tokens da Pump.fun começam com exatos 30 SOL de reservas virtuais.
-                                    if v_sol_normalized > (30.0 + max_bonding_curve):
-                                        return False, f"Bonding curve avançada ({v_sol_normalized:.2f} SOL)."
-                                    return True, "Token recém-criado (topo do bloco)."
-                        elif resp.status == 429: # Rate Limit
-                            await asyncio.sleep(0.3)
-                            continue
-                except (asyncio.TimeoutError, aiohttp.ClientError):
-                    # Se houver erro de rede/timeout, tolera e tenta de novo
-                    pass
-                    
-                if attempt < max_retries - 1:
-                    await asyncio.sleep(0.2) # [FIX] Backoff curto e fixo — aqui velocidade > tolerância
-            
-            # Se não encontrou a conta no RPC após o loop ou deu muito timeout, retorna como Bloco Zero (Modo Tolerante)
+
+        if not curve.get("found") or curve.get("error") in ("corrupted",):
+            # Conta ainda não propagou (ou payload inesperado) = bloco zero, tolera.
             return True, "Token no bloco zero ou RPC inacessível (Modo Tolerante)."
-        except Exception:
-            pass
-        return True, "Bypass de filtro (erro inesperado)"
+
+        v_sol = curve.get("v_sol")
+        if v_sol is None:
+            return True, "Dados de liquidez indisponíveis — Modo Tolerante."
+
+        # Tokens da Pump.fun começam com exatos 30 SOL de reservas virtuais.
+        if v_sol > (30.0 + max_bonding_curve):
+            return False, f"Bonding curve avançada ({v_sol:.2f} SOL)."
+        return True, "Token recém-criado (topo do bloco)."
 
     async def _check_token_quality_for_global(self, mint, session, rpc_url, config):
         hardcore = config.get("hardcore_mode", False)
@@ -126,39 +99,22 @@ class SolanaSniper(SolanaCore):
             return True, "Hardcore Mode: filtro de fluxo inicial pulado (velocidade máxima)."
 
         # Espera 1.5s para ver se entram compras além do próprio Dev.
+        # [FIX] Esta leitura é INTENCIONALMENTE separada da de execute_real_snipe:
+        # o propósito aqui é observar a conta DEPOIS de 1.5s (crescimento de
+        # volume), não a mesma foto do instante zero. Por isso ela continua
+        # sendo uma chamada de rede própria — mas agora reaproveita o mesmo
+        # leitor compartilhado (_read_bonding_curve) em vez de duplicar a
+        # lógica de derivação de PDA/decode que existia aqui.
         await asyncio.sleep(1.5)
-        try:
-            from solders.pubkey import Pubkey
-            import base64
-            import struct
-            mint_pk = Pubkey.from_string(mint)
-            program_pk = Pubkey.from_string("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P")
-            pda, _ = Pubkey.find_program_address([b"bonding-curve", bytes(mint_pk)], program_pk)
-            
-            payload = {
-                "jsonrpc": "2.0", "id": 1,
-                "method": "getAccountInfo",
-                "params": [str(pda), {"encoding": "base64"}]
-            }
-            async with session.post(rpc_url, json=payload, timeout=2.0) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    if "result" in data and data["result"]["value"]:
-                        b64_data = data["result"]["value"]["data"][0]
-                        raw_bytes = base64.b64decode(b64_data)
-                        if len(raw_bytes) >= 40:
-                            v_sol = struct.unpack("<Q", raw_bytes[16:24])[0]
-                            v_sol_normalized = v_sol / 1e9
-                            
-                            # Pump.fun começa com exatos 30 SOL virtuais. 
-                            # Se tiver menos de 30.5 SOL (meio SOL injetado), o fluxo é praticamente nulo.
-                            if v_sol_normalized < 30.5:
-                                return False, f"Volume inicial insuficiente (Reservas SOL: {v_sol_normalized:.2f})."
-                            return True, "Aprovado nos filtros de qualidade."
-        except Exception:
-            pass
-            
-        return True, "RPC indisponível/Timeout, ignorando filtro de fluxo inicial (Bypass)."
+        curve = await self._read_bonding_curve(mint, session, rpc_url)
+        if not curve.get("found") or curve.get("v_sol") is None:
+            return True, "RPC indisponível/Timeout, ignorando filtro de fluxo inicial (Bypass)."
+
+        # Pump.fun começa com exatos 30 SOL virtuais.
+        # Se tiver menos de 30.5 SOL (meio SOL injetado), o fluxo é praticamente nulo.
+        if curve["v_sol"] < 30.5:
+            return False, f"Volume inicial insuficiente (Reservas SOL: {curve['v_sol']:.2f})."
+        return True, "Aprovado nos filtros de qualidade."
 
     async def _get_dynamic_metrics(self, mint, session, rpc_url):
         try:
@@ -359,6 +315,8 @@ class SolanaSniper(SolanaCore):
         # "status" do usuário em "sniping" para sempre (sniper órfão, sem crash visível e
         # sem log de erro), sem qualquer chance de auto-recuperação.
         try:
+            logger.debug(f"[User {user_id}] handle_snipe_and_monitor iniciado para o token: {target_token}")
+            
             # Filtro de Anti-Golpe/Qualidade Apenas no Modo Global (quando target_token na config é vazio)
             if not state["config"].get("target_token"):
                 rpc_url = os.getenv("SOLANA_RPC_URL", "https://mainnet.helius-rpc.com/?api-key=eff46054-caa6-4e08-8731-e9abad96e5d2")
@@ -397,7 +355,10 @@ class SolanaSniper(SolanaCore):
                         return False
                     await self.log_to_user(user_id, "INFO", f"✅ [MOMENTUM APROVADO] {msg}")
 
+            logger.debug(f"[User {user_id}] Passou pelos filtros (ou Hardcore Mode). Invocando execute_real_snipe...")
             success = await self.execute_real_snipe(user_id, state, target_token)
+            logger.debug(f"[User {user_id}] Retorno de execute_real_snipe: {success}")
+            
             if success:
                 state["config"]["status"] = "monitoring_position"
                 await self.broadcast_to_user(user_id, {"type": "config", **state["config"], "is_active": state["is_active"]})

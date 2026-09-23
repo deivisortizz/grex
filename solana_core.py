@@ -865,35 +865,30 @@ class SolanaCore:
             self.logger.error(traceback.format_exc())
             return False
 
-    async def pre_buy_validation(self, mint: str, session: aiohttp.ClientSession, rpc_url: str, min_liquidity_sol: float = 15.0) -> tuple[bool, str]:
+    async def _read_bonding_curve(self, mint: str, session: aiohttp.ClientSession, rpc_url: str,
+                                   max_retries: int = 2, timeout: float = 0.6, retry_delay: float = 0.15) -> dict:
         """
-        [Validação Pré-Compra de Segurança]
-        Verifica a integridade do payload do token e se há liquidez/reservas mínimas
-        antes de enviar a transação para o RPC.
+        [FIX] Leitura ÚNICA e compartilhada da conta de Bonding Curve da Pump.fun.
 
-        [FIX] Esta função estava travando quase 100% das tentativas de snipe em modo
-        Global: fazia até 5 tentativas com timeout de 2s cada (até ~11,5s no caminho
-        crítico) e tratava "conta ainda não propagou no RPC" como FALHA FATAL. Só que
-        isso é exatamente o que acontece em todo snipe de bloco zero — o
-        logsSubscribe da Helius nos avisa do InitializeMint2 antes de outro nó RPC
-        conseguir responder getAccountInfo pra essa mesma conta. O filtro de frescor
-        já existente (_check_token_freshness) já tratava esse cenário como "Modo
-        Tolerante" (segue em frente); esta função fazia o oposto e rodava primeiro,
-        matando a tentativa antes do resto da lógica ser alcançado. Resultado
-        observado em produção: dezenas de tokens detectados, praticamente zero
-        compras executadas, e a única vez que passou, a bonding curve já tinha
-        corrido de 30 para 115 SOL enquanto esperava essa validação responder.
-        Agora: retries rápidos (timeout curto, poucas tentativas) e "conta não
-        encontrada ainda" vira BYPASS tolerante, não abortamento — mantendo só as
-        checagens que indicam um problema real (payload corrompido, reservas
-        zeradas, liquidez abaixo do mínimo em uma conta que EXISTE).
+        Antes, pre_buy_validation e _check_token_freshness faziam CADA UMA a sua
+        própria chamada getAccountInfo pra essa MESMA conta, em sequência, dentro
+        do caminho crítico de uma única compra — dobrando a latência e a pressão
+        de rate-limit na Helius bem no momento em que velocidade importa mais.
+        Agora execute_real_snipe lê a conta uma única vez (em paralelo com a
+        busca de saldo) e reaproveita o resultado nas duas validações.
+
+        Retorna: {"found": bool, "v_sol": float|None, "v_tokens": int|None,
+                  "raw_len": int, "error": str|None}
+        "found" = a conta existe e foi lida (mesmo que o payload esteja corrompido).
+        "error" quando presente descreve o motivo de não ter dados utilizáveis
+        ("not_found", "corrupted", "timeout", "http_<code>", "max_retries").
         """
+        result = {"found": False, "v_sol": None, "v_tokens": None, "raw_len": 0, "error": None}
         try:
             from solders.pubkey import Pubkey
             import base64
             import struct
 
-            # Derivar o PDA do Bonding Curve da Pump.fun
             mint_pk = Pubkey.from_string(mint)
             program_pk = Pubkey.from_string("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P")
             pda, _ = Pubkey.find_program_address([b"bonding-curve", bytes(mint_pk)], program_pk)
@@ -905,62 +900,84 @@ class SolanaCore:
                 "params": [str(pda), {"encoding": "base64"}]
             }
 
-            max_retries = 2  # [FIX] era 5 — velocidade > tolerância no caminho crítico
             for attempt in range(max_retries):
                 try:
-                    async with session.post(rpc_url, json=payload, timeout=0.6) as resp:  # [FIX] era 2.0
+                    async with session.post(rpc_url, json=payload, timeout=timeout) as resp:
                         if resp.status != 200:
                             if attempt < max_retries - 1:
-                                await asyncio.sleep(0.15)  # [FIX] era 0.3
+                                await asyncio.sleep(retry_delay)
                                 continue
-                            return True, f"RPC retornou {resp.status} em todas as tentativas — bloco zero, seguindo tolerante."
+                            result["error"] = f"http_{resp.status}"
+                            return result
 
                         data = await resp.json()
 
-                        # 1. Conta ainda não encontrada no RPC.
-                        # [FIX] Isso NÃO é mais um abortamento fatal — é o sinal normal
-                        # de bloco zero. Tenta mais uma vez rápido; se persistir,
-                        # segue em frente tolerante (igual _check_token_freshness já faz).
                         if "result" not in data or not data["result"]["value"]:
                             if attempt < max_retries - 1:
-                                await asyncio.sleep(0.15)
+                                await asyncio.sleep(retry_delay)
                                 continue
-                            return True, "Bloco zero: conta ainda não propagou no RPC (Modo Tolerante)."
+                            result["error"] = "not_found"
+                            return result
 
                         b64_data = data["result"]["value"]["data"][0]
                         raw_bytes = base64.b64decode(b64_data)
+                        result["raw_len"] = len(raw_bytes)
 
-                        # O payload do Bonding Curve da Pump.fun possui 40+ bytes.
-                        # Conta EXISTE mas está corrompida — isso sim é um problema real.
                         if len(raw_bytes) < 40:
-                            return False, f"Payload corrompido: Estrutura de dados muito curta ({len(raw_bytes)} bytes)."
+                            result["found"] = True
+                            result["error"] = "corrupted"
+                            return result
 
-                        # Extrair virtualTokenReserves (offset 8) e virtualSolReserves (offset 16)
-                        virtual_token_reserves = struct.unpack("<Q", raw_bytes[8:16])[0]
-                        virtual_sol_reserves = struct.unpack("<Q", raw_bytes[16:24])[0]
-
-                        # 2. Validar Reservas Virtuais de Tokens
-                        if virtual_token_reserves == 0:
-                            return False, "Reservas de tokens zeradas (Liquidez Drenada/Inválida)."
-
-                        # 3. Validar Limite Mínimo de Liquidez (em SOL)
-                        v_sol_normalized = virtual_sol_reserves / 1e9
-
-                        if v_sol_normalized < min_liquidity_sol:
-                            return False, f"Liquidez Insuficiente: {v_sol_normalized:.2f} SOL detectados (Mínimo exigido: {min_liquidity_sol:.2f} SOL)."
-
-                        return True, f"Token Saudável (Liquidez: {v_sol_normalized:.2f} SOL / Integridade: OK)."
+                        result["found"] = True
+                        result["v_tokens"] = struct.unpack("<Q", raw_bytes[8:16])[0]
+                        result["v_sol"] = struct.unpack("<Q", raw_bytes[16:24])[0] / 1e9
+                        return result
                 except (asyncio.TimeoutError, aiohttp.ClientError):
                     if attempt < max_retries - 1:
-                        await asyncio.sleep(0.15)
+                        await asyncio.sleep(retry_delay)
                         continue
-                    return True, "Timeout de rede na validação — bloco zero, seguindo tolerante."
+                    result["error"] = "timeout"
+                    return result
 
-            return True, "Falha ao validar após retries — seguindo tolerante para não perder a janela de entrada."
-
+            result["error"] = "max_retries"
+            return result
         except Exception as e:
-            # [FIX] Erro inesperado na validação não deveria travar a compra inteira.
-            return True, f"Bypass por exceção na validação ({e})."
+            result["error"] = f"exception:{e}"
+            return result
+
+    def evaluate_pre_buy(self, curve: dict, min_liquidity_sol: float = 15.0) -> tuple[bool, str]:
+        """
+        [Validação Pré-Compra de Segurança]
+        Avalia o resultado de _read_bonding_curve contra as regras de segurança
+        pré-compra (payload íntegro, reservas não-zeradas, liquidez mínima).
+        Não faz I/O — recebe a leitura já pronta, feita uma única vez por
+        execute_real_snipe e reaproveitada também por evaluate_freshness.
+
+        [FIX] "Conta ainda não propagou no RPC" (found=False) NÃO é mais tratado
+        como falha fatal — é o sinal normal de bloco zero (o logsSubscribe da
+        Helius avisa do InitializeMint2 antes de outro nó RPC conseguir responder
+        getAccountInfo pra essa mesma conta). Isso já travava quase 100% das
+        tentativas de snipe em modo Global antes desta correção. Só payload
+        corrompido, reservas zeradas ou liquidez abaixo do mínimo (numa conta que
+        EXISTE) continuam sendo abortamento real.
+        """
+        if curve.get("error") == "corrupted":
+            return False, f"Payload corrompido: Estrutura de dados muito curta ({curve.get('raw_len', 0)} bytes)."
+
+        if not curve.get("found"):
+            return True, "Bloco zero: conta ainda não propagou no RPC (Modo Tolerante)."
+
+        if curve.get("v_tokens") == 0:
+            return False, "Reservas de tokens zeradas (Liquidez Drenada/Inválida)."
+
+        v_sol = curve.get("v_sol")
+        if v_sol is None:
+            return True, "Dados de liquidez indisponíveis — Modo Tolerante."
+
+        if v_sol < min_liquidity_sol:
+            return False, f"Liquidez Insuficiente: {v_sol:.2f} SOL detectados (Mínimo exigido: {min_liquidity_sol:.2f} SOL)."
+
+        return True, f"Token Saudável (Liquidez: {v_sol:.2f} SOL / Integridade: OK)."
 
     async def execute_real_snipe(self, user_id, state, token_mint):
         try:
@@ -1000,36 +1017,37 @@ class SolanaCore:
 
             rpc_url = os.getenv("SOLANA_RPC_URL", "https://mainnet.helius-rpc.com/?api-key=eff46054-caa6-4e08-8731-e9abad96e5d2")
             async with aiohttp.ClientSession() as session:
-                
+
+                payer_pubkey_str = str(payer.pubkey())
+
+                # --- LEITURA ÚNICA DA BONDING CURVE ---
+                # [FIX] Antes, a validação pré-compra e o filtro de frescor faziam
+                # CADA UM sua própria chamada getAccountInfo pra essa MESMA conta,
+                # em sequência — dobrando a latência e a pressão de rate-limit no
+                # caminho crítico de toda compra. Agora é uma leitura só, em
+                # paralelo com a busca de saldo, reaproveitada pelas duas checagens.
+                balance_task = asyncio.create_task(self._get_sol_balance(payer_pubkey_str, session, rpc_url))
+                curve_task = asyncio.create_task(self._read_bonding_curve(token_mint, session, rpc_url))
+                balance_before, curve = await asyncio.gather(balance_task, curve_task)
+
                 # --- VALIDAÇÃO PRÉ-COMPRA ---
                 min_liquidity = state.get("config", {}).get("min_liquidity_sol", 15.0)
-                is_valid, validation_msg = await self.pre_buy_validation(token_mint, session, rpc_url, min_liquidity_sol=min_liquidity)
+                is_valid, validation_msg = self.evaluate_pre_buy(curve, min_liquidity_sol=min_liquidity)
                 if not is_valid:
                     await self.log_to_user(user_id, "WARN", f"🛑 COMPRA ABORTADA (PRÉ-CHECK): {validation_msg}")
                     return False
-                
+
                 await self.log_to_user(user_id, "INFO", f"✅ [PRÉ-CHECK PASSOU] {validation_msg}")
                 # ----------------------------
 
-                payer_pubkey_str = str(payer.pubkey())
-                
-                balance_task = asyncio.create_task(self._get_sol_balance(payer_pubkey_str, session, rpc_url))
                 anti_delay_filter = state.get("config", {}).get("anti_delay_filter", True)
                 max_bonding_curve = state.get("config", {}).get("max_bonding_curve", 20.0)
-                
-                # Check se foi disparado por um sistema que possui freshness (global sniper) 
+
+                # Check se foi disparado por um sistema que possui freshness (global sniper)
                 # Copy sniper tbm vai se beneficiar dessa checagem, mas vamos colocar um bypass para copy trading se quisermos
-                
-                freshness_task = None
-                is_fresh = True
-                fresh_msg = "Freshness ignorado para este bot"
-                if hasattr(self, '_check_token_freshness'):
-                    freshness_task = asyncio.create_task(self._check_token_freshness(token_mint, session, rpc_url, anti_delay_filter, max_bonding_curve))
-                
-                if freshness_task:
-                    balance_before, (is_fresh, fresh_msg) = await asyncio.gather(balance_task, freshness_task)
-                else:
-                    balance_before = await balance_task
+                is_fresh, fresh_msg = True, "Freshness ignorado para este bot"
+                if hasattr(self, 'evaluate_freshness'):
+                    is_fresh, fresh_msg = self.evaluate_freshness(curve, anti_delay_filter, max_bonding_curve)
                 
                 if not is_fresh:
                     await self.log_to_user(user_id, "WARN", f"🚫 [FILTRO ANTI-ATRASO] {fresh_msg} Compra abortada para evitar dump instantâneo.")
@@ -1055,12 +1073,22 @@ class SolanaCore:
                     "pool": "auto"
                 }
 
-                async with session.post("https://pumpportal.fun/api/trade-local", json=payload) as response:
-                    if response.status != 200:
-                        err_text = await response.text()
-                        await self.log_to_user(user_id, "ERROR", f"Falha na API PumpPortal: {err_text}")
-                        return False
-                    tx_bytes = await response.read()
+                self.logger.debug(f"[User {user_id}] Solicitando transação à PumpPortal para {token_mint} com payload: {payload}")
+                try:
+                    async with session.post("https://pumpportal.fun/api/trade-local", json=payload, timeout=3.0) as response:
+                        if response.status != 200:
+                            err_text = await response.text()
+                            await self.log_to_user(user_id, "ERROR", f"Falha na API PumpPortal (Status {response.status}): {err_text}")
+                            return False
+                        tx_bytes = await response.read()
+                except asyncio.TimeoutError:
+                    await self.log_to_user(user_id, "ERROR", "Falha Crítica: Timeout (3s) na API PumpPortal ao construir transação.")
+                    return False
+                except Exception as e:
+                    await self.log_to_user(user_id, "ERROR", f"Falha Crítica: Erro ao contatar PumpPortal: {e}")
+                    return False
+                
+                self.logger.debug(f"[User {user_id}] Transação recebida da PumpPortal. Decodificando...")
 
                 transaction = VersionedTransaction.from_bytes(tx_bytes)
                 
@@ -1083,14 +1111,17 @@ class SolanaCore:
                     ]
                 }
                 
-                async with session.post(rpc_url, json=rpc_payload) as rpc_resp:
-                    rpc_result = await rpc_resp.json()
-                    
-                    if "result" in rpc_result:
-                        tx_sig = rpc_result["result"]
-                        await self.log_to_user(user_id, "INFO", f"✅ Transação de compra disparada! TX: {tx_sig}")
+                self.logger.debug(f"[User {user_id}] Enviando transação assinada para {rpc_url}...")
+                try:
+                    async with session.post(rpc_url, json=rpc_payload, timeout=3.0) as rpc_resp:
+                        rpc_result = await rpc_resp.json()
                         
-                        await self.log_to_user(user_id, "INFO", "⏳ Aguardando confirmação (mudança de saldo)...")
+                        if "result" in rpc_result:
+                            tx_sig = rpc_result["result"]
+                            await self.log_to_user(user_id, "INFO", f"✅ Transação de compra disparada! TX: {tx_sig}")
+                            self.logger.debug(f"[User {user_id}] Transação enviada com sucesso. Assinatura: {tx_sig}")
+                            
+                            await self.log_to_user(user_id, "INFO", "⏳ Aguardando confirmação (mudança de saldo)...")
                         balance_after = await self._wait_for_balance_change(payer_pubkey_str, balance_before, True, session, rpc_url, user_id)
                         
                         sol_spent = balance_before - balance_after
@@ -1110,10 +1141,18 @@ class SolanaCore:
                     else:
                         err_msg = rpc_result.get("error", "Erro desconhecido")
                         await self.log_to_user(user_id, "ERROR", f"A rede retornou erro ao enviar a transação de compra: {err_msg}")
+                        self.logger.debug(f"[User {user_id}] Erro da RPC ao enviar transação: {err_msg}")
                         return False
+                except asyncio.TimeoutError:
+                    await self.log_to_user(user_id, "ERROR", "Falha Crítica: Timeout (3s) na RPC da Helius ao enviar transação de compra.")
+                    return False
+                except Exception as e:
+                    await self.log_to_user(user_id, "ERROR", f"Falha Crítica: Erro de conexão com RPC Helius: {e}")
+                    return False
 
         except Exception as e:
             await self.log_to_user(user_id, "ERROR", f"Falha crítica ao executar snipe real: {e}")
+            self.logger.error(f"[User {user_id}] Stack trace detalhada do erro em execute_real_snipe:")
             self.logger.error(traceback.format_exc())
             return False
 

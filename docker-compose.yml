@@ -10,6 +10,7 @@ services:
       - "8766:8766"
       - "8767:8767"
       - "8768:8768" # Copy Sniper (copy_sniper.py) — faltava, causava o WS falhar externamente
+      - "8769:8769" # CEX Listing Sniper (listing_sniper_service.py)
       - "3001:3000" # <--- Alterado de 3000:3000 para 3001:3000
     volumes:
       - grex_data:/app/data
