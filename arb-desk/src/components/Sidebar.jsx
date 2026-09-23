@@ -12,7 +12,8 @@ import {
   User,
   Zap,
   Users,
-  Globe2
+  Globe2,
+  Rocket
 } from 'lucide-react'
 
 const navItems = [
@@ -23,6 +24,7 @@ const navItems = [
   { name: 'Base Sniper', icon: Flame, accent: 'orange' },
   { name: 'Solana Sniper', icon: Zap, accent: 'violet' },
   { name: 'Copy Trading', icon: Users, accent: 'cyan' },
+  { name: 'Listing Sniper', icon: Rocket, accent: 'pink' },
   { name: 'Histórico', icon: History },
   { name: 'Configurações', icon: Settings },
   { name: 'Corretoras', icon: Target },
@@ -64,6 +66,7 @@ export default function Sidebar({ wsStatus = 'Offline', ping, activeTab, setActi
           const isSniper = item.name === 'Base Sniper'
           const isSolana = item.name === 'Solana Sniper'
           const isCopy = item.name === 'Copy Trading'
+          const isListing = item.name === 'Listing Sniper'
           const isAdminTab = item.name === 'Master Admin'
           return (
             <button
@@ -81,9 +84,11 @@ export default function Sidebar({ wsStatus = 'Offline', ping, activeTab, setActi
                           ? 'bg-violet-500/10 text-white border border-violet-500/30'
                           : isCopy
                             ? 'bg-cyan-500/10 text-white border border-cyan-500/30'
-                            : isAdminTab
-                              ? 'bg-purple-500/10 text-white border border-purple-500/30'
-                              : 'bg-zinc-800 text-white'
+                            : isListing
+                              ? 'bg-pink-500/10 text-white border border-pink-500/30'
+                              : isAdminTab
+                                ? 'bg-purple-500/10 text-white border border-purple-500/30'
+                                : 'bg-zinc-800 text-white'
                   : 'text-zinc-400 hover:text-white hover:bg-zinc-800/50'
               }`}
             >
@@ -101,9 +106,11 @@ export default function Sidebar({ wsStatus = 'Offline', ping, activeTab, setActi
                             ? 'text-violet-400'
                             : isCopy
                               ? 'text-cyan-400'
-                              : isAdminTab
-                                ? 'text-purple-400'
-                                : 'text-emerald-400'
+                              : isListing
+                                ? 'text-pink-400'
+                                : isAdminTab
+                                  ? 'text-purple-400'
+                                  : 'text-emerald-400'
                     : ''
                 }
               />
@@ -131,6 +138,11 @@ export default function Sidebar({ wsStatus = 'Offline', ping, activeTab, setActi
               {isCopy && (
                 <span className="ml-auto text-[9px] font-bold uppercase tracking-widest text-cyan-400 bg-cyan-500/15 border border-cyan-500/30 px-1.5 py-0.5 rounded font-mono">
                   SMART
+                </span>
+              )}
+              {isListing && (
+                <span className="ml-auto text-[9px] font-bold uppercase tracking-widest text-pink-400 bg-pink-500/15 border border-pink-500/30 px-1.5 py-0.5 rounded font-mono">
+                  NOVO
                 </span>
               )}
               {isAdminTab && (

@@ -16,6 +16,7 @@ import AccountSettings from './components/AccountSettings'
 import SolanaDashboard from './components/solana/SolanaDashboard'
 import TradeWinToast from './components/TradeWinToast'
 import ExoticArbitrageTab from './components/ExoticArbitrageTab'
+import ListingSniperTab from './components/ListingSniperTab'
 
 function App() {
   // Controle do menu mobile
@@ -229,11 +230,12 @@ function App() {
         {activeTab === 'Base Sniper' && <SniperDashboard />}
         {activeTab === 'Solana Sniper' && <SolanaDashboard initialSubTab="sniper" />}
         {activeTab === 'Copy Trading' && <SolanaDashboard initialSubTab="copy_trading" />}
+        {activeTab === 'Listing Sniper' && <ListingSniperTab />}
         {activeTab === 'Master Admin' && isAdmin && <AdminDashboard token={token} />}
         {activeTab === 'Minha Conta' && <AccountSettings token={token} />}
 
         {/* Fallback for other tabs */}
-        {!['Cotações', 'Configurações', 'Histórico', 'Analytics', 'Autobot', 'Corretoras', 'Oceano Azul', 'Base Sniper', 'Solana Sniper', 'Copy Trading', 'Master Admin', 'Minha Conta'].includes(activeTab) && (
+        {!['Cotações', 'Configurações', 'Histórico', 'Analytics', 'Autobot', 'Corretoras', 'Oceano Azul', 'Pares Exóticos', 'Base Sniper', 'Solana Sniper', 'Copy Trading', 'Listing Sniper', 'Master Admin', 'Minha Conta'].includes(activeTab) && (
           <div className="text-zinc-500 py-10">Módulo em desenvolvimento...</div>
         )}
       </main>

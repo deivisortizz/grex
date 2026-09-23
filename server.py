@@ -27,6 +27,14 @@ DATA_DIR = os.getenv('DATA_DIR', os.path.join(os.path.dirname(os.path.abspath(__
 DB_PATH = os.path.join(DATA_DIR, 'sniper.db')
 
 # Setup Fernet Crypto
+# [FIX] Garante que DATA_DIR exista fisicamente ANTES de escrever a chave.
+# Sem isso, um volume persistente novo/vazio montado em /app/data pelo Coolify
+# (que sobrepõe o `mkdir -p /app/data` feito em tempo de build no Dockerfile)
+# faz open(key_path, 'wb') falhar com FileNotFoundError logo na importação do
+# módulo — e como o start.sh roda `python -c "import server"` sozinho, em
+# primeiro plano, com `set -e`, essa exceção matava o script inteiro antes do
+# Uvicorn sequer existir, derrubando o container inteiro.
+os.makedirs(DATA_DIR, exist_ok=True)
 key_path = os.path.join(DATA_DIR, '.master.key')
 if not os.path.exists(key_path):
     master_key = Fernet.generate_key()

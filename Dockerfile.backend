@@ -20,8 +20,20 @@ RUN mkdir -p /app/data && chmod -R 777 /app/data
 # Copiar os scripts e código
 COPY . .
 
-# Expor a porta que o motor HFT usa (8765)
-EXPOSE 8765
+# [FIX] Garante que start.sh seja executável mesmo que o bit +x se perca
+# ao copiar/clonar em algum ambiente (ex: certos exports do Windows/CI).
+RUN chmod +x start.sh
 
-# Comando de execução
-CMD ["python3", "arbitrage_bot.py"]
+# Expor todas as portas da stack: motor HFT (8765), Base Sniper (8766),
+# Solana Sniper (8767), Copy Sniper (8768), CEX Listing Sniper (8769)
+# e o servidor web FastAPI (3000).
+EXPOSE 8765 8766 8767 8768 8769 3000
+
+# [FIX] O Dockerfile chamava só `python3 arbitrage_bot.py` diretamente — o
+# start.sh (que sobe todos os bots em background + o Uvicorn em foreground)
+# nunca era executado por este CMD. Se o Coolify não tivesse um "Start
+# Command" customizado sobrescrevendo isso no painel (configuração externa,
+# fora do repositório), o container real subia só o arbitrage_bot.py sozinho
+# e nada jamais escutava na porta 3000. Agora o próprio Dockerfile já é
+# autossuficiente e não depende de nenhuma configuração invisível do painel.
+CMD ["./start.sh"]
