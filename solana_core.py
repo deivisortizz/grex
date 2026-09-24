@@ -746,10 +746,19 @@ class SolanaCore:
                 token_balance = await self._get_token_balance(payer_pubkey_str, token_mint, session, rpc_url, user_id=user_id)
                 await self.log_to_user(user_id, "INFO", f"🪙 Saldo de tokens antes da venda: {token_balance:.2f} {token_mint[:4]}")
                 if token_balance <= 0:
-                    await self.log_to_user(user_id, "ERROR", f"❌ Saldo insuficiente do token {token_mint} na carteira. Venda cancelada.")
+                    # [FIX] Saldo zero significa que NÃO HÁ NADA a vender — seja porque a
+                    # compra original reverteu on-chain (posição fantasma) ou porque já foi
+                    # vendida por outro caminho. Antes isso retornava False como uma "falha
+                    # temporária", e como catastrophic/trailing/timeout retentam para sempre,
+                    # o bot ficava martelando essa mesma checagem a cada ~2s indefinidamente
+                    # (visto em produção: 9 tentativas seguidas em pouco mais de um minuto até
+                    # o usuário pausar manualmente). Saldo zero é TERMINAL, não transitório:
+                    # encerra a posição de vez em vez de tentar vender o inexistente de novo.
+                    await self.log_to_user(user_id, "WARN", f"⚠️ Nenhum token de {token_mint[:4]} na carteira — posição fantasma (compra provavelmente revertida) ou já vendida antes. Encerrando o rastreamento sem tentar vender de novo.")
                     if token_mint in state.get("open_positions", {}):
-                        state["open_positions"][token_mint]["sell_pending"] = False
-                    return False
+                        del state["open_positions"][token_mint]
+                        await self.broadcast_positions(user_id)
+                    return True
                 
                 async with session.post("https://pumpportal.fun/api/trade-local", json=payload) as response:
                     if response.status != 200:
@@ -1130,6 +1139,30 @@ class SolanaCore:
                                 return False
 
                             await self.log_to_user(user_id, "INFO", f"💸 Saldo final: {balance_after:.5f} SOL | Custo Real: {sol_spent:.5f} SOL")
+
+                            # [FIX] SOL sair da carteira só prova que a rede cobrou a taxa da
+                            # transação — NÃO que o swap em si foi executado. Uma transação que
+                            # reverte on-chain (slippage estourado, corrida com outro comprador,
+                            # curva já migrada, etc.) ainda cobra taxa de rede + prioridade
+                            # (~jito_tip), fazendo sol_spent > 0 mesmo com ZERO tokens recebidos.
+                            # Sem essa checagem, o bot "compra" e passa a monitorar posições
+                            # fantasmas — exatamente o padrão visto em produção: Custo Real de
+                            # ~0.001 SOL (só o tip) e "Saldo de tokens: 0.00" na hora de vender,
+                            # com o Stop-Loss depois calculando -97% em cima de dado inexistente.
+                            token_balance = await self._get_token_balance(payer_pubkey_str, token_mint, session, rpc_url)
+                            if token_balance <= 0:
+                                # RPC pode estar levemente atrasado indexando o saldo de token
+                                # logo após a confirmação do saldo em SOL — duas tentativas
+                                # rápidas antes de desistir de vez.
+                                for _ in range(2):
+                                    await asyncio.sleep(0.5)
+                                    token_balance = await self._get_token_balance(payer_pubkey_str, token_mint, session, rpc_url)
+                                    if token_balance > 0:
+                                        break
+
+                            if token_balance <= 0:
+                                await self.log_to_user(user_id, "ERROR", f"❌ [FALHA] SOL foi debitado ({sol_spent:.5f} SOL, provavelmente só a taxa de rede) mas NENHUM token foi recebido — a transação de compra reverteu on-chain. Abortando trade fantasma.")
+                                return False
 
                             state["open_positions"][token_mint] = {
                                 "sol_spent": sol_spent,

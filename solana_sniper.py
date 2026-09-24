@@ -106,7 +106,15 @@ class SolanaSniper(SolanaCore):
         # leitor compartilhado (_read_bonding_curve) em vez de duplicar a
         # lógica de derivação de PDA/decode que existia aqui.
         await asyncio.sleep(1.5)
-        curve = await self._read_bonding_curve(mint, session, rpc_url)
+        # [FIX] Este filtro NÃO está no caminho crítico de latência (já esperou 1.5s
+        # de propósito) — diferente do _read_bonding_curve usado em execute_real_snipe,
+        # onde cada 100ms de retry custa a corrida contra outros bots. Aqui vale muito
+        # mais tentar mais vezes por uma leitura REAL do que desistir rápido e cair no
+        # bypass — visto em produção que a RPC compartilhada (mesma API key da Helius
+        # usada por TODOS os bots do ecossistema) falha com frequência suficiente pra
+        # esse filtro estar sistematicamente desativado, deixando passar qualquer
+        # token sem nenhuma checagem real de volume orgânico.
+        curve = await self._read_bonding_curve(mint, session, rpc_url, max_retries=4, timeout=1.0, retry_delay=0.3)
         if not curve.get("found") or curve.get("v_sol") is None:
             return True, "RPC indisponível/Timeout, ignorando filtro de fluxo inicial (Bypass)."
 
