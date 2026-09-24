@@ -317,7 +317,7 @@ class SolanaSniper(SolanaCore):
                 
         return True, "Crescimento estável validado."
 
-    async def handle_snipe_and_monitor(self, user_id, state, target_token, force_entry=False):
+    async def handle_snipe_and_monitor(self, user_id, state, target_token, force_entry=False, is_manual=False):
         # [FIX] Toda a função roda dentro de um try/except: como é sempre disparada via
         # asyncio.create_task (fire-and-forget), uma exceção não tratada aqui travaria o
         # "status" do usuário em "sniping" para sempre (sniper órfão, sem crash visível e
@@ -364,7 +364,7 @@ class SolanaSniper(SolanaCore):
                     await self.log_to_user(user_id, "INFO", f"✅ [MOMENTUM APROVADO] {msg}")
 
             logger.debug(f"[User {user_id}] Passou pelos filtros (ou Hardcore Mode). Invocando execute_real_snipe...")
-            success = await self.execute_real_snipe(user_id, state, target_token)
+            success = await self.execute_real_snipe(user_id, state, target_token, is_manual=is_manual)
             logger.debug(f"[User {user_id}] Retorno de execute_real_snipe: {success}")
             
             if success:

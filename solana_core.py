@@ -56,6 +56,20 @@ def rate_limit_delay(streak):
     return RATE_LIMIT_BACKOFF_SCHEDULE[idx]
 
 
+# [FIX] Overrides EXCLUSIVOS da compra manual (clique do usuário), nunca usados
+# pelo sniper automático. O disparo manual é uma decisão humana e deliberada —
+# não faz sentido protegê-lo com os mesmos limites conservadores de capital do
+# modo automático (que precisa sobreviver a centenas de tentativas por hora).
+# Um timeout de 30s aguardando confirmação, com slippage/tip do próprio config
+# do usuário, é o cenário clássico de "furou a fila, mas o slippage configurado
+# pro automático era baixo demais pro momento do clique" — a resposta certa
+# pra ISSO é agressividade extra só nesse caminho, não mexer no automático.
+MANUAL_SLIPPAGE_PCT = 25.0          # 20-30% pedido: usa o meio da faixa
+MANUAL_JITO_TIP_SOL = 0.004         # 0.003-0.005 SOL pedido: meio da faixa
+MANUAL_BALANCE_WAIT_SECONDS = 5     # janela curta antes de tentar de novo
+MANUAL_MAX_ATTEMPTS = 2             # 1 original + 1 retry, depois desiste
+
+
 class SolanaCore:
     def __init__(self, history_table="solana_sniper_history", logger_name="SolanaCore"):
         self.history_table = history_table
@@ -412,10 +426,13 @@ class SolanaCore:
         await self.log_to_user(user_id, "WARN", "Tempo esgotado aguardando confirmação via signature status.")
         return False
 
-    async def _wait_for_balance_change(self, pubkey_str, initial_balance, is_buy, session, rpc_url, user_id):
+    async def _wait_for_balance_change(self, pubkey_str, initial_balance, is_buy, session, rpc_url, user_id, max_wait_seconds=30):
+        # [FIX] max_wait_seconds configurável — a compra manual usa uma janela
+        # bem mais curta (5s) pra poder tentar de novo rapidamente em vez de
+        # ficar travada 30s inteiros numa transação que já dropou.
         retries = 0
         current_balance = initial_balance
-        while retries < 30:
+        while retries < max_wait_seconds:
             await asyncio.sleep(1)
             current_balance = await self._get_sol_balance(pubkey_str, session, rpc_url)
             
@@ -666,7 +683,10 @@ class SolanaCore:
                     
                     await self.log_to_user(user_id, "WARN", f"⚡ Invocando COMPRA MANUAL para o token: {token_to_buy}")
                     if hasattr(self, 'handle_snipe_and_monitor'):
-                        asyncio.create_task(self.handle_snipe_and_monitor(user_id, state, token_to_buy, force_entry=force_entry))
+                        # [FIX] is_manual=True aplica os overrides agressivos exclusivos do
+                        # disparo manual (slippage/tip fixos + fast-retry) em execute_real_snipe,
+                        # sem alterar em nada o comportamento do sniper automático.
+                        asyncio.create_task(self.handle_snipe_and_monitor(user_id, state, token_to_buy, force_entry=force_entry, is_manual=True))
 
                 elif data.get("type") == "force_sell":
                     token_to_sell = data.get("token")
@@ -988,7 +1008,7 @@ class SolanaCore:
 
         return True, f"Token Saudável (Liquidez: {v_sol:.2f} SOL / Integridade: OK)."
 
-    async def execute_real_snipe(self, user_id, state, token_mint):
+    async def execute_real_snipe(self, user_id, state, token_mint, is_manual=False):
         try:
             wallet_pk_str = state.get("wallet")
             if not wallet_pk_str:
@@ -1007,21 +1027,30 @@ class SolanaCore:
 
             await self.log_to_user(user_id, "INFO", f"🔑 Carteira carregada: {payer.pubkey()}")
 
-            slippage = float(state["config"]["slippage"])
             buy_amount_sol = float(state["config"].get("trade_amount", 0.005))
-            
-            # --- GESTÃO DE RISCO: Aporte Mínimo e Proteção de Jito Tip ---
+
+            # --- GESTÃO DE RISCO: Aporte Mínimo (sempre vale, manual ou não) ---
             min_trade_amount_sol = float(state["config"].get("min_trade_amount_sol", 0.02))
             if buy_amount_sol < min_trade_amount_sol:
                 await self.log_to_user(user_id, "ERROR", f"🛑 COMPRA ABORTADA: Aporte ({buy_amount_sol} SOL) menor que o limite seguro. Mínimo: {min_trade_amount_sol} SOL.")
                 return False
 
-            jito_tip_sol = float(state["config"]["jito_tip"])
-            max_jito_tip_pct = 0.10 # Max 10% do valor da compra
-            max_allowed_tip = buy_amount_sol * max_jito_tip_pct
-            if jito_tip_sol > max_allowed_tip:
-                await self.log_to_user(user_id, "WARN", f"⚠️ Jito Tip ({jito_tip_sol} SOL) excede {max_jito_tip_pct*100}% do aporte de {buy_amount_sol} SOL. Ajustando para {max_allowed_tip:.4f} SOL para proteger capital.")
-                jito_tip_sol = max_allowed_tip
+            if is_manual:
+                # [FIX] Override exclusivo do disparo manual — ignora por completo os
+                # limites conservadores do config do automático (slippage/tip do
+                # usuário e o teto de 10% do aporte) e aplica os parâmetros agressivos
+                # fixos definidos em MANUAL_SLIPPAGE_PCT/MANUAL_JITO_TIP_SOL.
+                slippage = MANUAL_SLIPPAGE_PCT
+                jito_tip_sol = MANUAL_JITO_TIP_SOL
+                await self.log_to_user(user_id, "WARN", f"⚡ [MODO MANUAL] Overrides agressivos aplicados: Slippage {slippage}% | Jito Tip {jito_tip_sol} SOL.")
+            else:
+                slippage = float(state["config"]["slippage"])
+                jito_tip_sol = float(state["config"]["jito_tip"])
+                max_jito_tip_pct = 0.10 # Max 10% do valor da compra
+                max_allowed_tip = buy_amount_sol * max_jito_tip_pct
+                if jito_tip_sol > max_allowed_tip:
+                    await self.log_to_user(user_id, "WARN", f"⚠️ Jito Tip ({jito_tip_sol} SOL) excede {max_jito_tip_pct*100}% do aporte de {buy_amount_sol} SOL. Ajustando para {max_allowed_tip:.4f} SOL para proteger capital.")
+                    jito_tip_sol = max_allowed_tip
             # -------------------------------------------------------------
 
             rpc_url = os.getenv("SOLANA_RPC_URL", "https://mainnet.helius-rpc.com/?api-key=eff46054-caa6-4e08-8731-e9abad96e5d2")
@@ -1069,124 +1098,152 @@ class SolanaCore:
                     await self.log_to_user(user_id, "ERROR", f"❌ Saldo insuficiente! Requerido: ~{required_balance:.5f} SOL | Atual: {balance_before:.5f} SOL. Abortando compra para proteger a carteira.")
                     return False
 
-                await self.log_to_user(user_id, "WARN", f"🔥 Construindo transação atômica (PumpPortal) para {token_mint} | Valor: {buy_amount_sol} SOL...")
-                
-                payload = {
-                    "publicKey": str(payer.pubkey()),
-                    "action": "buy",
-                    "mint": token_mint.strip(),
-                    "amount": float(buy_amount_sol),
-                    "denominatedInSol": "true",
-                    "slippage": int(slippage),
-                    "priorityFee": float(jito_tip_sol),
-                    "pool": "auto"
-                }
+                # [FIX] Extraído para _submit_buy_and_confirm — permite retry (compra
+                # manual) sem repetir os pré-checks acima (curva/freshness/saldo), que
+                # não precisam ser refeitos numa segunda tentativa imediata.
+                max_attempts = MANUAL_MAX_ATTEMPTS if is_manual else 1
+                wait_seconds = MANUAL_BALANCE_WAIT_SECONDS if is_manual else 30
 
-                self.logger.debug(f"[User {user_id}] Solicitando transação à PumpPortal para {token_mint} com payload: {payload}")
-                try:
-                    async with session.post("https://pumpportal.fun/api/trade-local", json=payload, timeout=3.0) as response:
-                        if response.status != 200:
-                            err_text = await response.text()
-                            await self.log_to_user(user_id, "ERROR", f"Falha na API PumpPortal (Status {response.status}): {err_text}")
-                            return False
-                        tx_bytes = await response.read()
-                except asyncio.TimeoutError:
-                    await self.log_to_user(user_id, "ERROR", "Falha Crítica: Timeout (3s) na API PumpPortal ao construir transação.")
-                    return False
-                except Exception as e:
-                    await self.log_to_user(user_id, "ERROR", f"Falha Crítica: Erro ao contatar PumpPortal: {e}")
-                    return False
-                
-                self.logger.debug(f"[User {user_id}] Transação recebida da PumpPortal. Decodificando...")
+                for attempt in range(1, max_attempts + 1):
+                    if attempt > 1:
+                        await self.log_to_user(user_id, "WARN", f"🔁 [RETRY MANUAL {attempt}/{max_attempts}] Tentativa anterior não confirmou em {wait_seconds}s. Reconstruindo e reenviando com blockhash novo...")
+                        balance_before = await self._get_sol_balance(payer_pubkey_str, session, rpc_url)
 
-                transaction = VersionedTransaction.from_bytes(tx_bytes)
-                
-                signed_tx = VersionedTransaction(transaction.message, [payer])
-                
-                await self.log_to_user(user_id, "WARN", "🚀 Disparando transação assinada para a rede (Helius/Jito)...")
-                
-                encoded_tx = base64.b64encode(bytes(signed_tx)).decode('utf-8')
-                rpc_payload = {
-                    "jsonrpc": "2.0",
-                    "id": 1,
-                    "method": "sendTransaction",
-                    "params": [
-                        encoded_tx,
-                        {
-                            "encoding": "base64",
-                            "skipPreflight": True,
-                            "maxRetries": 0
-                        }
-                    ]
-                }
-                
-                self.logger.debug(f"[User {user_id}] Enviando transação assinada para {rpc_url}...")
-                try:
-                    async with session.post(rpc_url, json=rpc_payload, timeout=3.0) as rpc_resp:
-                        rpc_result = await rpc_resp.json()
-                        
-                        if "result" in rpc_result:
-                            tx_sig = rpc_result["result"]
-                            await self.log_to_user(user_id, "INFO", f"✅ Transação de compra disparada! TX: {tx_sig}")
-                            self.logger.debug(f"[User {user_id}] Transação enviada com sucesso. Assinatura: {tx_sig}")
+                    result = await self._submit_buy_and_confirm(
+                        user_id, state, payer, token_mint, buy_amount_sol, slippage, jito_tip_sol,
+                        session, rpc_url, payer_pubkey_str, balance_before, wait_seconds=wait_seconds,
+                    )
+                    if result:
+                        return True
 
-                            await self.log_to_user(user_id, "INFO", "⏳ Aguardando confirmação (mudança de saldo)...")
-                            balance_after = await self._wait_for_balance_change(payer_pubkey_str, balance_before, True, session, rpc_url, user_id)
-
-                            sol_spent = balance_before - balance_after
-                            if sol_spent <= 0:
-                                await self.log_to_user(user_id, "ERROR", "❌ [FALHA] Saldo inalterado ou timeout da RPC. A transação falhou na rede Solana. Abortando trade fantasma.")
-                                return False
-
-                            await self.log_to_user(user_id, "INFO", f"💸 Saldo final: {balance_after:.5f} SOL | Custo Real: {sol_spent:.5f} SOL")
-
-                            # [FIX] SOL sair da carteira só prova que a rede cobrou a taxa da
-                            # transação — NÃO que o swap em si foi executado. Uma transação que
-                            # reverte on-chain (slippage estourado, corrida com outro comprador,
-                            # curva já migrada, etc.) ainda cobra taxa de rede + prioridade
-                            # (~jito_tip), fazendo sol_spent > 0 mesmo com ZERO tokens recebidos.
-                            # Sem essa checagem, o bot "compra" e passa a monitorar posições
-                            # fantasmas — exatamente o padrão visto em produção: Custo Real de
-                            # ~0.001 SOL (só o tip) e "Saldo de tokens: 0.00" na hora de vender,
-                            # com o Stop-Loss depois calculando -97% em cima de dado inexistente.
-                            token_balance = await self._get_token_balance(payer_pubkey_str, token_mint, session, rpc_url)
-                            if token_balance <= 0:
-                                # RPC pode estar levemente atrasado indexando o saldo de token
-                                # logo após a confirmação do saldo em SOL — duas tentativas
-                                # rápidas antes de desistir de vez.
-                                for _ in range(2):
-                                    await asyncio.sleep(0.5)
-                                    token_balance = await self._get_token_balance(payer_pubkey_str, token_mint, session, rpc_url)
-                                    if token_balance > 0:
-                                        break
-
-                            if token_balance <= 0:
-                                await self.log_to_user(user_id, "ERROR", f"❌ [FALHA] SOL foi debitado ({sol_spent:.5f} SOL, provavelmente só a taxa de rede) mas NENHUM token foi recebido — a transação de compra reverteu on-chain. Abortando trade fantasma.")
-                                return False
-
-                            state["open_positions"][token_mint] = {
-                                "sol_spent": sol_spent,
-                                "buy_amount_sol": buy_amount_sol,
-                                "jito_tip_buy": jito_tip_sol
-                            }
-
-                            return True
-                        else:
-                            err_msg = rpc_result.get("error", "Erro desconhecido")
-                            await self.log_to_user(user_id, "ERROR", f"A rede retornou erro ao enviar a transação de compra: {err_msg}")
-                            self.logger.debug(f"[User {user_id}] Erro da RPC ao enviar transação: {err_msg}")
-                            return False
-                except asyncio.TimeoutError:
-                    await self.log_to_user(user_id, "ERROR", "Falha Crítica: Timeout (3s) na RPC da Helius ao enviar transação de compra.")
-                    return False
-                except Exception as e:
-                    await self.log_to_user(user_id, "ERROR", f"Falha Crítica: Erro de conexão com RPC Helius: {e}")
-                    return False
+                return False
 
         except Exception as e:
             await self.log_to_user(user_id, "ERROR", f"Falha crítica ao executar snipe real: {e}")
             self.logger.error(f"[User {user_id}] Stack trace detalhada do erro em execute_real_snipe:")
             self.logger.error(traceback.format_exc())
+            return False
+
+    async def _submit_buy_and_confirm(self, user_id, state, payer, token_mint, buy_amount_sol, slippage,
+                                       jito_tip_sol, session, rpc_url, payer_pubkey_str, balance_before,
+                                       wait_seconds=30):
+        """Constrói (PumpPortal), assina e envia a transação de compra, aguarda a
+        confirmação por mudança de saldo e verifica que tokens foram REALMENTE
+        recebidos antes de registrar a posição. Isolado do resto de
+        execute_real_snipe especificamente para poder ser chamado de novo (retry
+        da compra manual) sem repetir os pré-checks de curva/freshness/saldo."""
+        await self.log_to_user(user_id, "WARN", f"🔥 Construindo transação atômica (PumpPortal) para {token_mint} | Valor: {buy_amount_sol} SOL...")
+
+        payload = {
+            "publicKey": str(payer.pubkey()),
+            "action": "buy",
+            "mint": token_mint.strip(),
+            "amount": float(buy_amount_sol),
+            "denominatedInSol": "true",
+            "slippage": int(slippage),
+            "priorityFee": float(jito_tip_sol),
+            "pool": "auto"
+        }
+
+        self.logger.debug(f"[User {user_id}] Solicitando transação à PumpPortal para {token_mint} com payload: {payload}")
+        try:
+            async with session.post("https://pumpportal.fun/api/trade-local", json=payload, timeout=3.0) as response:
+                if response.status != 200:
+                    err_text = await response.text()
+                    await self.log_to_user(user_id, "ERROR", f"Falha na API PumpPortal (Status {response.status}): {err_text}")
+                    return False
+                tx_bytes = await response.read()
+        except asyncio.TimeoutError:
+            await self.log_to_user(user_id, "ERROR", "Falha Crítica: Timeout (3s) na API PumpPortal ao construir transação.")
+            return False
+        except Exception as e:
+            await self.log_to_user(user_id, "ERROR", f"Falha Crítica: Erro ao contatar PumpPortal: {e}")
+            return False
+
+        self.logger.debug(f"[User {user_id}] Transação recebida da PumpPortal. Decodificando...")
+
+        transaction = VersionedTransaction.from_bytes(tx_bytes)
+
+        signed_tx = VersionedTransaction(transaction.message, [payer])
+
+        await self.log_to_user(user_id, "WARN", "🚀 Disparando transação assinada para a rede (Helius/Jito)...")
+
+        encoded_tx = base64.b64encode(bytes(signed_tx)).decode('utf-8')
+        rpc_payload = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "sendTransaction",
+            "params": [
+                encoded_tx,
+                {
+                    "encoding": "base64",
+                    "skipPreflight": True,
+                    "maxRetries": 0
+                }
+            ]
+        }
+
+        self.logger.debug(f"[User {user_id}] Enviando transação assinada para {rpc_url}...")
+        try:
+            async with session.post(rpc_url, json=rpc_payload, timeout=3.0) as rpc_resp:
+                rpc_result = await rpc_resp.json()
+
+                if "result" in rpc_result:
+                    tx_sig = rpc_result["result"]
+                    await self.log_to_user(user_id, "INFO", f"✅ Transação de compra disparada! TX: {tx_sig}")
+                    self.logger.debug(f"[User {user_id}] Transação enviada com sucesso. Assinatura: {tx_sig}")
+
+                    await self.log_to_user(user_id, "INFO", f"⏳ Aguardando confirmação (mudança de saldo, até {wait_seconds}s)...")
+                    balance_after = await self._wait_for_balance_change(payer_pubkey_str, balance_before, True, session, rpc_url, user_id, max_wait_seconds=wait_seconds)
+
+                    sol_spent = balance_before - balance_after
+                    if sol_spent <= 0:
+                        await self.log_to_user(user_id, "ERROR", "❌ [FALHA] Saldo inalterado ou timeout da RPC. A transação falhou na rede Solana. Abortando trade fantasma.")
+                        return False
+
+                    await self.log_to_user(user_id, "INFO", f"💸 Saldo final: {balance_after:.5f} SOL | Custo Real: {sol_spent:.5f} SOL")
+
+                    # [FIX] SOL sair da carteira só prova que a rede cobrou a taxa da
+                    # transação — NÃO que o swap em si foi executado. Uma transação que
+                    # reverte on-chain (slippage estourado, corrida com outro comprador,
+                    # curva já migrada, etc.) ainda cobra taxa de rede + prioridade
+                    # (~jito_tip), fazendo sol_spent > 0 mesmo com ZERO tokens recebidos.
+                    # Sem essa checagem, o bot "compra" e passa a monitorar posições
+                    # fantasmas — exatamente o padrão visto em produção: Custo Real de
+                    # ~0.001 SOL (só o tip) e "Saldo de tokens: 0.00" na hora de vender,
+                    # com o Stop-Loss depois calculando -97% em cima de dado inexistente.
+                    token_balance = await self._get_token_balance(payer_pubkey_str, token_mint, session, rpc_url)
+                    if token_balance <= 0:
+                        # RPC pode estar levemente atrasado indexando o saldo de token
+                        # logo após a confirmação do saldo em SOL — duas tentativas
+                        # rápidas antes de desistir de vez.
+                        for _ in range(2):
+                            await asyncio.sleep(0.5)
+                            token_balance = await self._get_token_balance(payer_pubkey_str, token_mint, session, rpc_url)
+                            if token_balance > 0:
+                                break
+
+                    if token_balance <= 0:
+                        await self.log_to_user(user_id, "ERROR", f"❌ [FALHA] SOL foi debitado ({sol_spent:.5f} SOL, provavelmente só a taxa de rede) mas NENHUM token foi recebido — a transação de compra reverteu on-chain. Abortando trade fantasma.")
+                        return False
+
+                    state["open_positions"][token_mint] = {
+                        "sol_spent": sol_spent,
+                        "buy_amount_sol": buy_amount_sol,
+                        "jito_tip_buy": jito_tip_sol
+                    }
+
+                    return True
+                else:
+                    err_msg = rpc_result.get("error", "Erro desconhecido")
+                    await self.log_to_user(user_id, "ERROR", f"A rede retornou erro ao enviar a transação de compra: {err_msg}")
+                    self.logger.debug(f"[User {user_id}] Erro da RPC ao enviar transação: {err_msg}")
+                    return False
+        except asyncio.TimeoutError:
+            await self.log_to_user(user_id, "ERROR", "Falha Crítica: Timeout (3s) na RPC da Helius ao enviar transação de compra.")
+            return False
+        except Exception as e:
+            await self.log_to_user(user_id, "ERROR", f"Falha Crítica: Erro de conexão com RPC Helius: {e}")
             return False
 
     async def _get_dynamic_metrics(self, mint, session, rpc_url):
